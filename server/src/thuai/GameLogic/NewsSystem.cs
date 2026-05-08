@@ -3,10 +3,10 @@ namespace Thuai.GameLogic;
 public class NewsSystem
 {
     private readonly Random _rng = new();
-    private readonly int _intervalMin;
-    private readonly int _intervalMax;
     private readonly int _researchWindow;
+    private static readonly int[] ScheduledNewsDays = [1, 11, 21];
     private int _nextNewsId = 1;
+    private int _scheduledIndex;
     private int _nextNewsTick;
 
     private readonly List<News> _allNews = new();
@@ -41,54 +41,59 @@ public class NewsSystem
         "飞云商会发布看空研报，建议减持黄金头寸"
     ];
 
-    public NewsSystem(int intervalMin = 200, int intervalMax = 400, int researchWindow = 50)
+    public NewsSystem(int intervalMin = 1, int intervalMax = 1, int researchWindow = 2)
     {
-        _intervalMin = intervalMin;
-        _intervalMax = intervalMax;
         _researchWindow = researchWindow;
-        _nextNewsTick = _rng.Next(_intervalMin, _intervalMax + 1);
+        _scheduledIndex = 0;
+        _nextNewsTick = ScheduledNewsDays[0];
     }
 
     public News? Tick(int currentTick)
     {
-        if (currentTick >= _nextNewsTick)
+        if (_scheduledIndex >= ScheduledNewsDays.Length || currentTick < _nextNewsTick)
+            return null;
+
+        News news;
+        if (_preGeneratedNews != null)
         {
-            News news;
-            if (_preGeneratedNews != null)
+            news = new News
             {
-                // Use the pre-generated news (created for insider preview) but
-                // stamp it with the actual publish tick so timing is correct.
-                news = new News
-                {
-                    NewsId = _preGeneratedNews.NewsId,
-                    PublishTick = currentTick,
-                    Content = _preGeneratedNews.Content,
-                    Sentiment = _preGeneratedNews.Sentiment,
-                    IsFake = false,
-                    SourcePlayer = null
-                };
-                _preGeneratedNews = null;
-            }
-            else
-            {
-                news = GenerateNews(currentTick);
-            }
-            _allNews.Add(news);
-            _latestNews = news;
-            _nextNewsTick = currentTick + _rng.Next(_intervalMin, _intervalMax + 1);
-            return news;
+                NewsId = _preGeneratedNews.NewsId,
+                PublishTick = currentTick,
+                Content = _preGeneratedNews.Content,
+                Sentiment = _preGeneratedNews.Sentiment,
+                IsFake = false,
+                SourcePlayer = null
+            };
+            _preGeneratedNews = null;
         }
-        return null;
+        else
+        {
+            news = GenerateNews(currentTick);
+        }
+
+        _allNews.Add(news);
+        _latestNews = news;
+
+        _scheduledIndex++;
+        _nextNewsTick = _scheduledIndex < ScheduledNewsDays.Length
+            ? ScheduledNewsDays[_scheduledIndex]
+            : int.MaxValue;
+
+        return news;
     }
 
     /// <summary>
     /// Pre-generate the next news item so insider players can preview it early.
     /// The returned News has a placeholder PublishTick (the expected publish tick);
     /// the actual PublishTick is set when the news is formally published in Tick().
-    /// Returns null if already pre-generated or if the next tick is too far away.
+    /// Returns null when no scheduled news remains this month.
     /// </summary>
     public News? PreGenerateNextNews()
     {
+        if (_scheduledIndex >= ScheduledNewsDays.Length)
+            return null;
+
         if (_preGeneratedNews != null)
             return _preGeneratedNews;
 
@@ -133,16 +138,18 @@ public class NewsSystem
         return news;
     }
 
-    public bool IsWithinResearchWindow(int newsId, int currentTick)
-    {
-        var news = _allNews.Find(n => n.NewsId == newsId);
-        if (news == null) return false;
-        return currentTick - news.PublishTick <= _researchWindow;
-    }
-
     public News? GetNews(int newsId)
     {
         return _allNews.Find(n => n.NewsId == newsId);
+    }
+
+    public bool IsWithinResearchWindow(int newsId, int currentTick)
+    {
+        var news = GetNews(newsId);
+        if (news == null)
+            return false;
+
+        return currentTick - news.PublishTick <= _researchWindow;
     }
 
     public News? LatestNews => _latestNews;
@@ -152,8 +159,25 @@ public class NewsSystem
     public NewsSentiment? CurrentSentiment => _latestNews?.Sentiment;
 
     public int? NextNewsTickForInsider => _nextNewsTick > 3 ? _nextNewsTick - 3 : null;
+    public int PreviewTick => _scheduledIndex < ScheduledNewsDays.Length ? Math.Max(0, _nextNewsTick - 3) : -1;
 
     public int NextNewsTick => _nextNewsTick;
+
+    public News CreateSpoofedView(News source)
+    {
+        var sentiment = _rng.Next(2) == 0 ? NewsSentiment.Bullish : NewsSentiment.Bearish;
+        var templates = sentiment == NewsSentiment.Bullish ? BullishNews : BearishNews;
+
+        return new News
+        {
+            NewsId = source.NewsId,
+            PublishTick = source.PublishTick,
+            Content = templates[_rng.Next(templates.Length)],
+            Sentiment = sentiment,
+            IsFake = source.IsFake,
+            SourcePlayer = source.SourcePlayer
+        };
+    }
 
     public int? GetTicksUsed(int newsId, int submitTick)
     {
@@ -167,6 +191,7 @@ public class NewsSystem
         _allNews.Clear();
         _latestNews = null;
         _preGeneratedNews = null;
-        _nextNewsTick = _rng.Next(_intervalMin, _intervalMax + 1);
+        _scheduledIndex = 0;
+        _nextNewsTick = ScheduledNewsDays[0];
     }
 }

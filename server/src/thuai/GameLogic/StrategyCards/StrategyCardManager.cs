@@ -1,9 +1,9 @@
 namespace Thuai.GameLogic.StrategyCards;
 
 /// <summary>
-/// Manages the strategy card draft process between trading days.
-/// Each draft round: randomly picks 1 card from each category (no repeats across rounds),
-/// and both players blindly choose within 40 ticks.
+/// Manages the strategy card draft process between months.
+/// Each month: randomly picks 1 card from each category (no repeats across months),
+/// and both players blindly choose within the strategy phase.
 /// </summary>
 public class StrategyCardManager
 {
@@ -11,33 +11,21 @@ public class StrategyCardManager
 
     private static readonly List<Func<IStrategyCard>> InfrastructureFactory =
     [
-        () => new HighFrequencyLine(),
-        () => new LowLatencyBoard(),
         () => new InsiderInfo(),
-        () => new QuantCluster(),
         () => new FlashTrading()
     ];
 
     private static readonly List<Func<IStrategyCard>> RiskControlFactory =
     [
-        () => new FeeExemption(),
-        () => new IcebergOrder(),
         () => new StopLossBlade(),
         () => new TargetedPurchase()
     ];
 
     private static readonly List<Func<IStrategyCard>> FinTechFactory =
     [
-        () => new MaliciousShorting(),
-        () => new NetworkDisconnect(),
-        () => new DarkPoolTrading(),
-        () => new SentimentManipulation()
+        () => new NetworkStorm(),
+        () => new PublicOpinionAttack()
     ];
-
-    /// <summary>
-    /// Cards that have already been offered in previous draft rounds (no repeats per game).
-    /// </summary>
-    private readonly HashSet<string> _offeredCards = [];
 
     /// <summary>Current draft option from the Infrastructure category.</summary>
     public IStrategyCard? CurrentInfrastructure { get; private set; }
@@ -49,19 +37,15 @@ public class StrategyCardManager
     public IStrategyCard? CurrentFinTech { get; private set; }
 
     /// <summary>
-    /// Generate new draft options: one random card from each category,
-    /// excluding cards that have already been offered in this game.
-    /// Returns false if no cards remain in any category.
+    /// Generate new draft options: one random card from each category.
+    /// Players cannot select the same named card twice, but the public offer set
+    /// can repeat across months so month three still has valid draft choices.
     /// </summary>
     public bool GenerateDraftOptions()
     {
         CurrentInfrastructure = PickRandom(InfrastructureFactory);
         CurrentRiskControl = PickRandom(RiskControlFactory);
         CurrentFinTech = PickRandom(FinTechFactory);
-
-        if (CurrentInfrastructure != null) _offeredCards.Add(CurrentInfrastructure.Name);
-        if (CurrentRiskControl != null) _offeredCards.Add(CurrentRiskControl.Name);
-        if (CurrentFinTech != null) _offeredCards.Add(CurrentFinTech.Name);
 
         return CurrentInfrastructure != null
             || CurrentRiskControl != null
@@ -116,33 +100,32 @@ public class StrategyCardManager
     }
 
     /// <summary>
-    /// Reset all daily card state for a player (fee exemptions, usage flags, etc.).
-    /// Called at the start of each trading day.
+    /// Reset all monthly card state for a player.
+    /// Card ownership persists for the whole game; only month-scoped state resets.
     /// </summary>
-    public static void ResetDailyCardState(Player player)
+    public static void ResetMonthlyCardState(Player player)
     {
         foreach (var card in player.ActiveCards)
         {
-            // Reset cooldowns for active cards
-            if (!card.IsPassive)
-            {
-                card.CurrentCooldown = 0;
-            }
-
-            // Reset per-day state on specific card types
             switch (card)
             {
-                case FlashTrading flash:
-                    flash.ResetDaily();
+                case InsiderInfo insider:
+                    insider.ResetMonthly();
                     break;
-                case FeeExemption fee:
-                    fee.ResetDaily();
+                case FlashTrading flash:
+                    flash.ResetMonthly();
                     break;
                 case StopLossBlade stopLoss:
-                    stopLoss.ResetDaily();
+                    stopLoss.ResetMonthly();
                     break;
                 case TargetedPurchase targeted:
-                    targeted.ResetDaily();
+                    targeted.ResetMonthly();
+                    break;
+                case NetworkStorm storm:
+                    storm.CurrentCooldown = 0;
+                    break;
+                case PublicOpinionAttack attack:
+                    attack.CurrentCooldown = 0;
                     break;
             }
         }
@@ -167,24 +150,12 @@ public class StrategyCardManager
         CurrentInfrastructure = null;
         CurrentRiskControl = null;
         CurrentFinTech = null;
-        _offeredCards.Clear();
     }
 
     private IStrategyCard? PickRandom(List<Func<IStrategyCard>> factories)
     {
-        // Filter out factories whose cards have already been offered
-        var available = new List<Func<IStrategyCard>>();
-        foreach (var factory in factories)
-        {
-            var sample = factory();
-            if (!_offeredCards.Contains(sample.Name))
-            {
-                available.Add(factory);
-            }
-        }
-
-        if (available.Count == 0) return null;
-        return available[_rng.Next(available.Count)]();
+        if (factories.Count == 0) return null;
+        return factories[_rng.Next(factories.Count)]();
     }
 
     /// <summary>
@@ -195,19 +166,12 @@ public class StrategyCardManager
     {
         return template switch
         {
-            HighFrequencyLine => new HighFrequencyLine(),
-            LowLatencyBoard => new LowLatencyBoard(),
             InsiderInfo => new InsiderInfo(),
-            QuantCluster => new QuantCluster(),
             FlashTrading => new FlashTrading(),
-            FeeExemption => new FeeExemption(),
-            IcebergOrder => new IcebergOrder(),
             StopLossBlade => new StopLossBlade(),
             TargetedPurchase => new TargetedPurchase(),
-            MaliciousShorting => new MaliciousShorting(),
-            NetworkDisconnect => new NetworkDisconnect(),
-            DarkPoolTrading => new DarkPoolTrading(),
-            SentimentManipulation => new SentimentManipulation(),
+            NetworkStorm => new NetworkStorm(),
+            PublicOpinionAttack => new PublicOpinionAttack(),
             _ => throw new InvalidOperationException($"Unknown card type: {template.GetType().Name}")
         };
     }

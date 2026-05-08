@@ -59,7 +59,7 @@ public record GameSettings
     public int TicksPerSecond { get; init; } = 10;
 
     [JsonPropertyName("tradingDayTicks")]
-    public int TradingDayTicks { get; init; } = 2000;
+    public int TradingDayTicks { get; init; } = 30;
 
     [JsonPropertyName("tradingDayCount")]
     public int TradingDayCount { get; init; } = 3;
@@ -83,13 +83,22 @@ public record GameSettings
     public long InitialGoldPrice { get; init; } = 1000;
 
     [JsonPropertyName("defaultNetworkDelay")]
-    public int DefaultNetworkDelay { get; init; } = 5;
+    public int DefaultNetworkDelay { get; init; } = 1;
 
     [JsonPropertyName("defaultFeeRate")]
     public double DefaultFeeRate { get; init; } = 0.0002;
 
     [JsonPropertyName("maxOrdersPerTick")]
-    public int MaxOrdersPerTick { get; init; } = 5;
+    public int MaxOrdersPerTick { get; init; } = 2;
+
+    [JsonPropertyName("maxImmediateOrdersPerDay")]
+    public int MaxImmediateOrdersPerDay { get; init; } = 1;
+
+    [JsonPropertyName("maxRestingOrdersPerDay")]
+    public int MaxRestingOrdersPerDay { get; init; } = 1;
+
+    [JsonPropertyName("maxReportsPerNews")]
+    public int MaxReportsPerNews { get; init; } = 1;
 
     [JsonPropertyName("newsIntervalMin")]
     public int NewsIntervalMin { get; init; } = 200;
@@ -98,10 +107,10 @@ public record GameSettings
     public int NewsIntervalMax { get; init; } = 400;
 
     [JsonPropertyName("researchWindowTicks")]
-    public int ResearchWindowTicks { get; init; } = 50;
+    public int ResearchWindowTicks { get; init; } = 2;
 
     [JsonPropertyName("researchSettlementDelay")]
-    public int ResearchSettlementDelay { get; init; } = 100;
+    public int ResearchSettlementDelay { get; init; } = 3;
 
     [JsonPropertyName("baseResearchReward")]
     public long BaseResearchReward { get; init; } = 10000;

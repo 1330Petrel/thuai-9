@@ -2,16 +2,16 @@ namespace Thuai.GameLogic;
 
 /// <summary>
 /// Limit order book maintaining price-time priority for bids and asks.
-/// Bids are sorted by descending price, then ascending arrival tick.
-/// Asks are sorted by ascending price, then ascending arrival tick.
+/// Bids are sorted by descending price, then fastest priority first.
+/// Asks are sorted by ascending price, then fastest priority first.
 /// </summary>
 public class OrderBook
 {
-    // Bids: highest price first, then earliest arrival, then lowest OrderId as tiebreaker.
+    // Bids: highest price first, then lower priority rank, then earliest arrival.
     // SortedSet.Min returns the first element per the comparer, which is the best bid.
     private readonly SortedSet<Order> _bids;
 
-    // Asks: lowest price first, then earliest arrival, then lowest OrderId as tiebreaker.
+    // Asks: lowest price first, then lower priority rank, then earliest arrival.
     // SortedSet.Min returns the first element per the comparer, which is the best ask.
     private readonly SortedSet<Order> _asks;
 
@@ -56,10 +56,12 @@ public class OrderBook
             // Descending price: higher price comes first.
             int cmp = b.Price.CompareTo(a.Price);
             if (cmp != 0) return cmp;
-            // Ascending arrival tick: earlier arrival comes first.
+            cmp = a.PriorityRank.CompareTo(b.PriorityRank);
+            if (cmp != 0) return cmp;
             cmp = a.ArrivalTick.CompareTo(b.ArrivalTick);
             if (cmp != 0) return cmp;
-            // Tiebreaker by OrderId to ensure SortedSet treats distinct orders as distinct.
+            cmp = a.SubmitSequence.CompareTo(b.SubmitSequence);
+            if (cmp != 0) return cmp;
             return a.OrderId.CompareTo(b.OrderId);
         }));
 
@@ -68,10 +70,12 @@ public class OrderBook
             // Ascending price: lower price comes first.
             int cmp = a.Price.CompareTo(b.Price);
             if (cmp != 0) return cmp;
-            // Ascending arrival tick: earlier arrival comes first.
+            cmp = a.PriorityRank.CompareTo(b.PriorityRank);
+            if (cmp != 0) return cmp;
             cmp = a.ArrivalTick.CompareTo(b.ArrivalTick);
             if (cmp != 0) return cmp;
-            // Tiebreaker by OrderId.
+            cmp = a.SubmitSequence.CompareTo(b.SubmitSequence);
+            if (cmp != 0) return cmp;
             return a.OrderId.CompareTo(b.OrderId);
         }));
     }
@@ -120,7 +124,6 @@ public class OrderBook
 
     /// <summary>
     /// Get aggregated visible bid levels for market data broadcast.
-    /// Iceberg orders only show their visible portion.
     /// </summary>
     public List<(long Price, int Quantity)> GetVisibleBids(int maxLevels = 10)
     {
@@ -129,7 +132,6 @@ public class OrderBook
 
     /// <summary>
     /// Get aggregated visible ask levels for market data broadcast.
-    /// Iceberg orders only show their visible portion.
     /// </summary>
     public List<(long Price, int Quantity)> GetVisibleAsks(int maxLevels = 10)
     {

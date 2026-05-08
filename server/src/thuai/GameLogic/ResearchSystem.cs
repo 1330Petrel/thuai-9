@@ -19,8 +19,7 @@ public class ResearchSystem
     }
 
     public ResearchReport? SubmitReport(string playerToken, int newsId, Prediction prediction,
-                                        int currentTick, int? playerResearchWindow = null,
-                                        double decayMultiplier = 1.0)
+        int currentTick, int? playerResearchWindow = null, double decayMultiplier = 1.0)
     {
         var news = _newsSystem.GetNews(newsId);
         if (news == null) return null;
@@ -40,9 +39,8 @@ public class ResearchSystem
             NewsId = newsId,
             Prediction = prediction,
             SubmitTick = currentTick,
-            TicksUsed = ticksUsed,
-            DecayMultiplier = decayMultiplier,
-            EffectiveWindow = effectiveWindow
+            SubmitDay = currentTick,
+            SettlementDay = news.PublishTick + _settlementDelay
         };
 
         _pendingReports.Add(report);
@@ -52,61 +50,64 @@ public class ResearchSystem
     public List<ResearchReport> SettleReports(int currentTick, Func<int, long> getMidPriceAtTick)
     {
         var settled = new List<ResearchReport>();
+        var dueReports = _pendingReports
+            .Where(report =>
+            {
+                var news = _newsSystem.GetNews(report.NewsId);
+                return news != null && currentTick >= news.PublishTick + _settlementDelay;
+            })
+            .GroupBy(report => report.NewsId)
+            .ToList();
 
-        for (int i = _pendingReports.Count - 1; i >= 0; i--)
+        foreach (var group in dueReports)
         {
-            var report = _pendingReports[i];
-            var news = _newsSystem.GetNews(report.NewsId);
-            if (news == null) continue;
+            var news = _newsSystem.GetNews(group.Key);
+            if (news == null)
+                continue;
 
             int settlementTick = news.PublishTick + _settlementDelay;
-            if (currentTick < settlementTick) continue;
-
             long priceAtPublish = getMidPriceAtTick(news.PublishTick);
             long priceAtSettlement = getMidPriceAtTick(settlementTick);
             long actualChange = priceAtSettlement - priceAtPublish;
+            long magnitude = Math.Abs(actualChange);
 
-            int effectiveWindow = report.EffectiveWindow;
+            var ordered = group
+                .OrderBy(report => report.SubmitTick)
+                .ThenBy(report => report.PlayerToken)
+                .ToList();
 
-            if (news.IsFake && report.PlayerToken != news.SourcePlayer)
+            for (int i = 0; i < ordered.Count; i++)
             {
-                report.IsCorrect = false;
-                double timeFactor = 1.0 - (double)report.TicksUsed / effectiveWindow * report.DecayMultiplier;
-                report.Reward = -(long)(_baseReward * timeFactor * Math.Max(Math.Abs(actualChange), 1));
+                var report = ordered[i];
+                report.ActualChange = actualChange;
+                report.SubmissionRank = i + 1;
 
-                _pendingReports.RemoveAt(i);
+                bool isCorrect = report.Prediction switch
+                {
+                    Prediction.Long => actualChange > 0,
+                    Prediction.Short => actualChange < 0,
+                    _ => actualChange == 0
+                };
+
+                if (news.IsFake && report.PlayerToken != news.SourcePlayer)
+                    isCorrect = false;
+
+                report.IsCorrect = isCorrect;
+                if (magnitude == 0)
+                {
+                    report.Reward = 0;
+                }
+                else
+                {
+                    long rankMultiplier = Math.Max(1, ordered.Count - i);
+                    long rewardMagnitude = _baseReward * rankMultiplier * magnitude;
+                    report.Reward = isCorrect ? rewardMagnitude : -rewardMagnitude;
+                }
+
+                _pendingReports.Remove(report);
                 _settledReports.Add(report);
                 settled.Add(report);
-                continue;
             }
-
-            if (report.Prediction == Prediction.Hold)
-            {
-                report.IsCorrect = true;
-                report.Reward = 0;
-            }
-            else
-            {
-                bool priceWentUp = actualChange > 0;
-                bool priceWentDown = actualChange < 0;
-
-                if (report.Prediction == Prediction.Long)
-                    report.IsCorrect = priceWentUp;
-                else
-                    report.IsCorrect = priceWentDown;
-
-                if (actualChange == 0)
-                    report.IsCorrect = false;
-
-                double timeFactor = 1.0 - (double)report.TicksUsed / effectiveWindow * report.DecayMultiplier;
-                long rewardMagnitude = (long)(_baseReward * timeFactor * Math.Abs(actualChange));
-
-                report.Reward = report.IsCorrect == true ? rewardMagnitude : -rewardMagnitude;
-            }
-
-            _pendingReports.RemoveAt(i);
-            _settledReports.Add(report);
-            settled.Add(report);
         }
 
         return settled;

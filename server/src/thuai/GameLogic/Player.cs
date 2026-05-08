@@ -1,10 +1,17 @@
 using Thuai.GameLogic.StrategyCards;
+using Thuai.Utility;
 
 namespace Thuai.GameLogic;
 
 public class Player
 {
     private readonly object _lock = new();
+    private readonly long _initialMora;
+    private readonly int _initialGold;
+    private readonly int _baseNetworkDelay;
+    private readonly double _baseTransactionFeeRate;
+    private readonly int _baseImmediateOrdersPerDay;
+    private readonly int _baseRestingOrdersPerDay;
 
     public string Token { get; }
     public int PlayerId { get; }
@@ -18,42 +25,88 @@ public class Player
 
     public List<IStrategyCard> ActiveCards { get; } = [];
 
-    public int NetworkDelay { get; set; } = 5;
-    public double TransactionFeeRate { get; set; } = 0.0002;
-    public int MaxOrdersPerTick { get; set; } = 5;
-    public int MaxReportsPerTick { get; set; } = 1;
+    public int NetworkDelay { get; set; }
+    public double TransactionFeeRate { get; set; }
+    public int MaxImmediateOrdersPerDay { get; set; }
+    public int MaxRestingOrdersPerDay { get; set; }
 
-    public int OrdersSentThisTick { get; set; }
-    public int ReportsSentThisTick { get; set; }
+    public int ImmediateOrdersUsedToday { get; set; }
+    public int RestingOrdersUsedToday { get; set; }
+    public int BonusImmediateOrdersToday { get; set; }
 
     public int TotalTradeCount { get; set; }
+    public int MonthlyTradeCount { get; set; }
+    public int PendingNextOrderExtraDelayDays { get; set; }
+    public bool PendingFakeBroadcast { get; set; }
+    public bool PendingCheapInsiderCorruption { get; set; }
+    public int InsiderPriorityNewsDay { get; set; }
+    public int OrdersSentThisTick { get; set; }
+    public int ReportsSentThisTick { get; set; }
+    public int MaxOrdersPerTick { get; set; }
+    public int MaxReportsPerTick { get; set; }
+
+    public HashSet<int> ReportedNewsIdsThisMonth { get; } = new();
 
     public bool IsImmune { get; set; }
     public int ImmuneUntilTick { get; set; }
+    public long ProtectedMidPrice { get; set; }
 
-    public Player(string token, int playerId)
+    public Player(string token, int playerId, GameSettings settings)
     {
         Token = token;
         PlayerId = playerId;
+
+        _initialMora = settings.InitialMora;
+        _initialGold = settings.InitialGold;
+        _baseNetworkDelay = settings.DefaultNetworkDelay;
+        _baseTransactionFeeRate = settings.DefaultFeeRate;
+        _baseImmediateOrdersPerDay = settings.MaxImmediateOrdersPerDay;
+        _baseRestingOrdersPerDay = settings.MaxRestingOrdersPerDay;
+
+        ResetForNewMonth();
     }
 
-    public void ResetForNewDay()
+    public Player(string token, int playerId)
+        : this(token, playerId, new GameSettings())
+    {
+    }
+
+    public void ResetForNewMonth()
     {
         lock (_lock)
         {
-            Mora = 1_000_000;
+            Mora = _initialMora;
             FrozenMora = 0;
-            Gold = 1_000;
+            Gold = _initialGold;
             FrozenGold = 0;
             LockedGold = 0;
             LockedGoldUntilTick = 0;
-            OrdersSentThisTick = 0;
-            ReportsSentThisTick = 0;
+            NetworkDelay = _baseNetworkDelay;
+            TransactionFeeRate = _baseTransactionFeeRate;
+            MaxImmediateOrdersPerDay = _baseImmediateOrdersPerDay;
+            MaxRestingOrdersPerDay = _baseRestingOrdersPerDay;
+            MaxOrdersPerTick = _baseImmediateOrdersPerDay + _baseRestingOrdersPerDay;
+            MaxReportsPerTick = 1;
+            ImmediateOrdersUsedToday = 0;
+            RestingOrdersUsedToday = 0;
+            BonusImmediateOrdersToday = 0;
+            MonthlyTradeCount = 0;
+            PendingNextOrderExtraDelayDays = 0;
+            PendingFakeBroadcast = false;
+            PendingCheapInsiderCorruption = false;
+            InsiderPriorityNewsDay = 0;
+            ReportedNewsIdsThisMonth.Clear();
+            IsImmune = false;
+            ImmuneUntilTick = 0;
+            ProtectedMidPrice = 0;
         }
     }
 
-    public void ResetTickCounters()
+    public void ResetDailyActionCounters()
     {
+        ImmediateOrdersUsedToday = 0;
+        RestingOrdersUsedToday = 0;
+        BonusImmediateOrdersToday = 0;
         OrdersSentThisTick = 0;
         ReportsSentThisTick = 0;
     }
@@ -62,12 +115,103 @@ public class Player
     {
         lock (_lock)
         {
-            return Mora + FrozenMora + (long)(Gold + FrozenGold + LockedGold) * midPrice;
+            long effectivePrice = midPrice;
+            if (IsImmune && ProtectedMidPrice > 0 && midPrice < ProtectedMidPrice)
+            {
+                effectivePrice = ProtectedMidPrice - (ProtectedMidPrice - midPrice) / 5;
+            }
+
+            return Mora + FrozenMora + (long)(Gold + FrozenGold + LockedGold) * effectivePrice;
         }
     }
 
+    public bool CanPlaceImmediateOrder() =>
+        ImmediateOrdersUsedToday < MaxImmediateOrdersPerDay + BonusImmediateOrdersToday;
+
+    public bool CanPlaceRestingOrder() =>
+        RestingOrdersUsedToday < MaxRestingOrdersPerDay;
+
+    public bool CanSubmitReport(int newsId) =>
+        !ReportedNewsIdsThisMonth.Contains(newsId);
+
     public bool CanPlaceOrder() => OrdersSentThisTick < MaxOrdersPerTick;
+
     public bool CanSubmitReport() => ReportsSentThisTick < MaxReportsPerTick;
+
+    public void MarkImmediateOrder()
+    {
+        ImmediateOrdersUsedToday++;
+        OrdersSentThisTick++;
+    }
+
+    public void MarkRestingOrder()
+    {
+        RestingOrdersUsedToday++;
+        OrdersSentThisTick++;
+    }
+
+    public void MarkReportSubmitted(int newsId)
+    {
+        ReportedNewsIdsThisMonth.Add(newsId);
+        ReportsSentThisTick++;
+    }
+
+    public int ConsumeNextOrderExtraDelayDays()
+    {
+        lock (_lock)
+        {
+            int extra = PendingNextOrderExtraDelayDays;
+            PendingNextOrderExtraDelayDays = 0;
+            return extra;
+        }
+    }
+
+    public void AddMonthlyTradeCount(int quantity = 1)
+    {
+        MonthlyTradeCount += quantity;
+        TotalTradeCount += quantity;
+    }
+
+    public void AddNextOrderExtraDelayDays(int amount)
+    {
+        lock (_lock)
+        {
+            PendingNextOrderExtraDelayDays += amount;
+        }
+    }
+
+    public void ResetForNewDay()
+    {
+        ResetForNewMonth();
+        ResetDailyActionCounters();
+    }
+
+    public void ResetTickCounters() => ResetDailyActionCounters();
+
+    public bool ConsumePendingFakeBroadcast()
+    {
+        if (!PendingFakeBroadcast)
+            return false;
+
+        PendingFakeBroadcast = false;
+        return true;
+    }
+
+    public bool ConsumePendingCheapInsiderCorruption()
+    {
+        if (!PendingCheapInsiderCorruption)
+            return false;
+
+        PendingCheapInsiderCorruption = false;
+        return true;
+    }
+
+    public void SetInsiderPriorityDay(int day)
+    {
+        InsiderPriorityNewsDay = day;
+    }
+
+    public bool HasInsiderPriorityDay(int day) => InsiderPriorityNewsDay == day;
 
     public void FreezeMora(long amount)
     {

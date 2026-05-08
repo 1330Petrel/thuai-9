@@ -3,10 +3,15 @@ namespace Thuai.GameLogic;
 using Thuai.Utility;
 using Thuai.GameLogic.StrategyCards;
 
-/// <summary>
-/// Master state machine that manages the full game lifecycle:
-/// Waiting -> PreparingGame -> (StrategySelection -> TradingDay -> Settlement) x3 -> Finished
-/// </summary>
+public record MonthSettlementResult(
+    int Month,
+    Dictionary<string, long> MonthNavs,
+    Dictionary<string, long> CumulativeNavs,
+    string WinnerToken,
+    string Reason,
+    string FinalBonusWinnerToken,
+    int FinalBonusPoints);
+
 public partial class Game
 {
     private readonly object _lock = new();
@@ -14,9 +19,13 @@ public partial class Game
 
     public GameStage Stage { get; private set; } = GameStage.Waiting;
     public int CurrentTick { get; private set; }
-    public int CurrentDayNumber { get; private set; } // 1-indexed
+    public int CurrentMonthNumber { get; private set; }
+    public int CurrentDayNumber { get; private set; }
     public TradingDay? CurrentTradingDay { get; private set; }
     public StrategyCardManager CardManager { get; } = new();
+    public MonthSettlementResult? LatestSettlement { get; private set; }
+    public bool HasPendingSettlementNotification { get; private set; }
+    public Dictionary<string, long> CumulativeNavs { get; } = new();
 
     private int _waitingTicksRemaining;
     private int _strategyTicksRemaining;
@@ -33,7 +42,17 @@ public partial class Game
     {
         Stage = GameStage.Waiting;
         CurrentTick = 0;
+        CurrentMonthNumber = 0;
         CurrentDayNumber = 0;
+        CurrentTradingDay = null;
+        LatestSettlement = null;
+        HasPendingSettlementNotification = false;
+        CardManager.Reset();
+        foreach (var token in Players.Keys.ToList())
+        {
+            Scoreboard[token] = 0;
+            CumulativeNavs[token] = 0;
+        }
     }
 
     public void Tick()
@@ -81,10 +100,22 @@ public partial class Game
 
     private void TransitionToStrategySelection()
     {
-        CurrentDayNumber++;
+        if (CurrentMonthNumber >= _settings.TradingDayCount)
+        {
+            Stage = GameStage.Finished;
+            return;
+        }
+
+        CurrentMonthNumber++;
+        CurrentDayNumber = 0;
         _strategyTicksRemaining = _settings.StrategySelectionTicks;
 
-        // Generate draft options for this round.
+        foreach (var player in Players.Values)
+        {
+            player.ResetForNewMonth();
+            StrategyCardManager.ResetMonthlyCardState(player);
+        }
+
         CardManager.GenerateDraftOptions();
         _playerStrategySelected.Clear();
         foreach (var player in Players.Values)
@@ -118,7 +149,8 @@ public partial class Game
             _settings.ResearchWindowTicks,
             _settings.ResearchSettlementDelay,
             _settings.BaseResearchReward,
-            _settings.NpcOrdersPerTick
+            _settings.NpcOrdersPerTick,
+            CurrentMonthNumber
         );
         CurrentTradingDay.Initialize();
 
@@ -128,6 +160,7 @@ public partial class Game
     private void TickTradingDay()
     {
         CurrentTradingDay?.Tick();
+        CurrentDayNumber = CurrentTradingDay?.CurrentTick ?? CurrentDayNumber;
 
         if (CurrentTradingDay?.IsFinished == true)
         {
@@ -139,19 +172,23 @@ public partial class Game
     {
         if (!_settlementProcessed)
         {
-            // First tick in Settlement: calculate NAV and determine the day's winner.
             if (CurrentTradingDay != null)
             {
                 var navs = CurrentTradingDay.CalculateSettlement();
-                DetermineRoundWinner(navs);
+                foreach (var (token, nav) in navs)
+                {
+                    CumulativeNavs[token] = CumulativeNavs.GetValueOrDefault(token, 0) + nav;
+                }
+
+                LatestSettlement = DetermineMonthResult(navs);
+                HasPendingSettlementNotification = true;
             }
             _settlementProcessed = true;
-            return; // Stay in Settlement for one tick so clients can see the results
+            return;
         }
 
-        // Second tick: transition out
         _settlementProcessed = false;
-        if (CurrentDayNumber >= _settings.TradingDayCount)
+        if (CurrentMonthNumber >= _settings.TradingDayCount)
         {
             Stage = GameStage.Finished;
         }
@@ -161,33 +198,9 @@ public partial class Game
         }
     }
 
-    private void DetermineRoundWinner(Dictionary<string, long> navs)
+    public void MarkSettlementNotificationPublished()
     {
-        if (navs.Count < 2) return;
-
-        var sorted = navs.OrderByDescending(kv => kv.Value).ToList();
-
-        if (sorted[0].Value > sorted[1].Value)
-        {
-            // Clear winner by NAV.
-            Scoreboard[sorted[0].Key] = Scoreboard.GetValueOrDefault(sorted[0].Key, 0) + 1;
-        }
-        else
-        {
-            // Tie in NAV -- use total trade count (excluding wash trades) as tiebreaker.
-            var p1 = Players[sorted[0].Key];
-            var p2 = Players[sorted[1].Key];
-
-            if (p1.TotalTradeCount > p2.TotalTradeCount)
-            {
-                Scoreboard[p1.Token] = Scoreboard.GetValueOrDefault(p1.Token, 0) + 1;
-            }
-            else if (p2.TotalTradeCount > p1.TotalTradeCount)
-            {
-                Scoreboard[p2.Token] = Scoreboard.GetValueOrDefault(p2.Token, 0) + 1;
-            }
-            // If still tied, no one gets a point for this round.
-        }
+        HasPendingSettlementNotification = false;
     }
 
     /// <summary>
@@ -208,5 +221,72 @@ public partial class Game
             _playerStrategySelected[playerToken] = true;
             return true;
         }
+    }
+
+    private MonthSettlementResult DetermineMonthResult(Dictionary<string, long> navs)
+    {
+        string winnerToken = "";
+        string reason = "tie";
+        string finalBonusWinnerToken = "";
+        int finalBonusPoints = 0;
+
+        var orderedByNav = navs
+            .OrderByDescending(entry => entry.Value)
+            .ThenByDescending(entry => Players[entry.Key].MonthlyTradeCount)
+            .ToList();
+
+        if (orderedByNav.Count >= 2)
+        {
+            var top = orderedByNav[0];
+            var second = orderedByNav[1];
+
+            if (top.Value > second.Value)
+            {
+                winnerToken = top.Key;
+                reason = "higher NAV";
+            }
+            else
+            {
+                int topTrades = Players[top.Key].MonthlyTradeCount;
+                int secondTrades = Players[second.Key].MonthlyTradeCount;
+                if (topTrades > secondTrades)
+                {
+                    winnerToken = top.Key;
+                    reason = "trade-count tiebreaker";
+                }
+            }
+        }
+        else if (orderedByNav.Count == 1)
+        {
+            winnerToken = orderedByNav[0].Key;
+            reason = "only player";
+        }
+
+        if (!string.IsNullOrEmpty(winnerToken))
+        {
+            Scoreboard[winnerToken] = Scoreboard.GetValueOrDefault(winnerToken, 0) + 1;
+        }
+
+        if (CurrentMonthNumber >= _settings.TradingDayCount)
+        {
+            var cumulativeOrdered = CumulativeNavs
+                .OrderByDescending(entry => entry.Value)
+                .ToList();
+            if (cumulativeOrdered.Count >= 2 && cumulativeOrdered[0].Value > cumulativeOrdered[1].Value)
+            {
+                finalBonusWinnerToken = cumulativeOrdered[0].Key;
+                finalBonusPoints = 2;
+                Scoreboard[finalBonusWinnerToken] = Scoreboard.GetValueOrDefault(finalBonusWinnerToken, 0) + 2;
+            }
+        }
+
+        return new MonthSettlementResult(
+            CurrentMonthNumber,
+            new Dictionary<string, long>(navs),
+            new Dictionary<string, long>(CumulativeNavs),
+            winnerToken,
+            reason,
+            finalBonusWinnerToken,
+            finalBonusPoints);
     }
 }

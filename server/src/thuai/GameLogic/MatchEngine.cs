@@ -2,10 +2,6 @@ using Thuai.GameLogic.StrategyCards;
 
 namespace Thuai.GameLogic;
 
-/// <summary>
-/// Matching engine that processes limit orders with price-time priority.
-/// Handles order submission (with network delay), cancellation, and trade execution.
-/// </summary>
 public class MatchEngine
 {
     private const string SystemToken = "SYSTEM";
@@ -13,9 +9,8 @@ public class MatchEngine
     private readonly OrderBook _orderBook;
     private readonly Dictionary<string, Player> _players;
     private readonly List<Order> _pendingOrders = new();
-    private readonly List<Trade> _tradesThisTick = new();
+    private readonly List<Trade> _tradesThisDay = new();
 
-    /// <summary>Fired after each trade is executed.</summary>
     public event Action<Trade>? OnTradeExecuted;
 
     public OrderBook OrderBook => _orderBook;
@@ -27,292 +22,309 @@ public class MatchEngine
         _players = players;
     }
 
-    /// <summary>
-    /// Submit a new order. The order enters a pending queue and will arrive at the
-    /// order book after the player's network delay elapses.
-    /// Returns null if validation fails (insufficient assets, rate limit, invalid params).
-    /// </summary>
     public Order? SubmitOrder(string playerToken, OrderSide side, long price, int quantity,
-        int currentTick, bool isIceberg = false)
+        int currentTick, int networkDelay = 0, int priorityRank = 1, bool isIceberg = false)
     {
         if (price <= 0 || quantity <= 0)
             return null;
 
-        // System/NPC orders skip all asset and rate-limit checks.
-        if (playerToken == SystemToken)
+        Player? player = null;
+        if (playerToken != SystemToken)
         {
-            var sysOrder = new Order(playerToken, side, price, quantity, currentTick, 0, isIceberg);
-            _pendingOrders.Add(sysOrder);
-            return sysOrder;
-        }
-
-        if (!_players.TryGetValue(playerToken, out var player))
-            return null;
-
-        if (!player.CanPlaceOrder())
-            return null;
-
-        if (side == OrderSide.Buy)
-        {
-            long cost = price * quantity;
-            if (player.Mora < cost)
+            if (!_players.TryGetValue(playerToken, out player))
                 return null;
-            player.FreezeMora(cost);
         }
-        else
+
+        if (playerToken != SystemToken)
         {
-            if (player.Gold < quantity)
-                return null;
-            player.FreezeGold(quantity);
+            if (side == OrderSide.Buy)
+            {
+                long cost = price * quantity;
+                if (player!.Mora < cost)
+                    return null;
+                player.FreezeMora(cost);
+            }
+            else
+            {
+                if (player!.Gold < quantity)
+                    return null;
+                player.FreezeGold(quantity);
+            }
         }
 
-        player.OrdersSentThisTick++;
-
-        var order = new Order(playerToken, side, price, quantity,
-            currentTick, player.NetworkDelay, isIceberg);
+        var order = new Order(playerToken, side, price, quantity, currentTick, networkDelay, priorityRank, isIceberg);
         _pendingOrders.Add(order);
         return order;
     }
 
-    /// <summary>
-    /// Cancel an active order. Unfreezes the remaining frozen assets.
-    /// Returns false if the order doesn't exist, belongs to another player,
-    /// or is already filled/cancelled.
-    /// </summary>
     public bool CancelOrder(string playerToken, long orderId)
     {
-        var order = _orderBook.GetOrder(orderId);
-        if (order == null)
-            return false;
-        if (order.PlayerToken != playerToken)
-            return false;
-        if (order.Status == OrderStatus.Filled || order.Status == OrderStatus.Cancelled)
-            return false;
-
-        // Unfreeze assets for the remaining (unfilled) portion.
-        if (order.PlayerToken != SystemToken
-            && _players.TryGetValue(order.PlayerToken, out var player))
+        var pending = _pendingOrders.FirstOrDefault(o => o.OrderId == orderId);
+        if (pending != null)
         {
-            if (order.Side == OrderSide.Buy)
-                player.UnfreezeMora(order.Price * order.RemainingQuantity);
-            else
-                player.UnfreezeGold(order.RemainingQuantity);
+            if (pending.PlayerToken != playerToken)
+                return false;
+
+            RefundPendingOrder(pending);
+            pending.Status = OrderStatus.Cancelled;
+            _pendingOrders.Remove(pending);
+            return true;
         }
 
+        var order = _orderBook.GetOrder(orderId);
+        if (order == null || order.PlayerToken != playerToken)
+            return false;
+        if (order.Status is OrderStatus.Filled or OrderStatus.Cancelled)
+            return false;
+
+        RefundActiveOrder(order);
         order.Status = OrderStatus.Cancelled;
         _orderBook.RemoveOrder(orderId);
         return true;
     }
 
-    /// <summary>
-    /// Process one tick: move arrived orders into the book, then run the matching loop.
-    /// Returns all trades executed during this tick.
-    /// </summary>
-    public List<Trade> ProcessTick(int currentTick)
+    public List<Trade> ProcessDay(int currentDay)
     {
-        _tradesThisTick.Clear();
+        _tradesThisDay.Clear();
 
-        // Partition pending orders into arrived vs still-waiting.
-        var arrived = new List<Order>();
-        var stillPending = new List<Order>();
+        var arrived = _pendingOrders
+            .Where(order => order.ArrivalTick <= currentDay)
+            .OrderBy(order => order.PriorityRank)
+            .ThenBy(order => order.ArrivalTick)
+            .ThenBy(order => order.SubmitSequence)
+            .ThenBy(order => order.OrderId)
+            .ToList();
 
-        foreach (var order in _pendingOrders)
-        {
-            if (order.ArrivalTick <= currentTick)
-                arrived.Add(order);
-            else
-                stillPending.Add(order);
-        }
+        _pendingOrders.RemoveAll(order => order.ArrivalTick <= currentDay);
 
-        _pendingOrders.Clear();
-        _pendingOrders.AddRange(stillPending);
-
-        // Insert arrived orders one at a time and attempt matching after each.
-        // This preserves correct price-time priority for orders arriving in the same tick.
         foreach (var order in arrived)
         {
-            _orderBook.AddOrder(order);
-            MatchOrders(currentTick);
+            ProcessOrder(order, currentDay);
         }
 
-        return new List<Trade>(_tradesThisTick);
+        return new List<Trade>(_tradesThisDay);
     }
 
-    /// <summary>
-    /// Continuously match the best bid against the best ask while they cross.
-    /// Trade price is the maker's price (the order that arrived earlier).
-    /// </summary>
-    private void MatchOrders(int currentTick)
-    {
-        while (true)
-        {
-            var bestBid = _orderBook.BestBidOrder;
-            var bestAsk = _orderBook.BestAskOrder;
+    public List<Trade> ProcessTick(int currentTick) => ProcessDay(currentTick);
 
-            if (bestBid == null || bestAsk == null)
+    public List<Order> GetPendingOrders(string playerToken)
+    {
+        return _pendingOrders.Where(o => o.PlayerToken == playerToken).ToList();
+    }
+
+    private void ProcessOrder(Order order, int currentDay)
+    {
+        bool marketable = IsMarketable(order);
+
+        if (_players.TryGetValue(order.PlayerToken, out var player))
+        {
+            bool accepted = marketable ? player.CanPlaceImmediateOrder() : player.CanPlaceRestingOrder();
+            if (!accepted)
+            {
+                RefundPendingOrder(order);
+                order.Status = OrderStatus.Cancelled;
+                return;
+            }
+
+            if (marketable)
+                player.MarkImmediateOrder();
+            else
+                player.MarkRestingOrder();
+        }
+
+        order.Intent = marketable ? OrderIntent.Immediate : OrderIntent.Resting;
+
+        while (order.RemainingQuantity > 0)
+        {
+            var opposite = order.Side == OrderSide.Buy
+                ? _orderBook.BestAskOrder
+                : _orderBook.BestBidOrder;
+
+            if (opposite == null)
                 break;
 
-            if (bestBid.Price < bestAsk.Price)
-                break; // No crossing; done.
+            bool crosses = order.Side == OrderSide.Buy
+                ? order.Price >= opposite.Price
+                : order.Price <= opposite.Price;
+            if (!crosses)
+                break;
 
-            // Trade price = maker's price. The maker is the order that was resting
-            // in the book first (earlier ArrivalTick). If both arrived in the same tick,
-            // use the bid's price (buyer pays their limit, which is >= ask price).
-            long tradePrice = bestBid.ArrivalTick <= bestAsk.ArrivalTick
-                ? bestBid.Price
-                : bestAsk.Price;
-
-            int tradeQuantity = Math.Min(bestBid.RemainingQuantity, bestAsk.RemainingQuantity);
-
-            long tradeAmount = tradePrice * tradeQuantity;
-            long buyerFee = CalculateFee(bestBid.PlayerToken, tradeAmount);
-            long sellerFee = CalculateFee(bestAsk.PlayerToken, tradeAmount);
-
-            ExecuteTrade(bestBid, bestAsk, tradePrice, tradeQuantity,
-                buyerFee, sellerFee, currentTick);
+            long tradePrice = opposite.Price;
+            int tradeQuantity = Math.Min(order.RemainingQuantity, opposite.RemainingQuantity);
+            ExecuteTrade(order, opposite, tradePrice, tradeQuantity, currentDay);
         }
+
+        if (order.RemainingQuantity <= 0)
+        {
+            order.Status = OrderStatus.Filled;
+            return;
+        }
+
+        if (order.Intent == OrderIntent.Immediate)
+        {
+            RefundUnfilledImmediate(order);
+            order.Status = order.Status == OrderStatus.PartiallyFilled
+                ? OrderStatus.PartiallyFilled
+                : OrderStatus.Cancelled;
+            return;
+        }
+
+        order.Status = order.Status == OrderStatus.PartiallyFilled
+            ? OrderStatus.PartiallyFilled
+            : OrderStatus.Pending;
+        _orderBook.AddOrder(order);
+    }
+
+    private bool IsMarketable(Order order)
+    {
+        return order.Side == OrderSide.Buy
+            ? _orderBook.BestAsk is long ask && order.Price >= ask
+            : _orderBook.BestBid is long bid && order.Price <= bid;
+    }
+
+    private void ExecuteTrade(Order taker, Order maker, long price, int quantity, int currentDay)
+    {
+        taker.RemainingQuantity -= quantity;
+        maker.RemainingQuantity -= quantity;
+
+        taker.Status = taker.RemainingQuantity == 0
+            ? OrderStatus.Filled
+            : OrderStatus.PartiallyFilled;
+        maker.Status = maker.RemainingQuantity == 0
+            ? OrderStatus.Filled
+            : OrderStatus.PartiallyFilled;
+
+        if (maker.Status == OrderStatus.Filled)
+            _orderBook.RemoveOrder(maker.OrderId);
+
+        long tradeAmount = price * quantity;
+        long buyerFee = CalculateFee(taker.Side == OrderSide.Buy ? taker.PlayerToken : maker.PlayerToken, tradeAmount);
+        long sellerFee = CalculateFee(taker.Side == OrderSide.Sell ? taker.PlayerToken : maker.PlayerToken, tradeAmount);
+
+        if (taker.Side == OrderSide.Buy)
+            ApplyBuyerFill(taker, price, quantity, buyerFee);
+        else
+            ApplySellerFill(taker, price, quantity, sellerFee);
+
+        if (maker.PlayerToken != SystemToken && _players.TryGetValue(maker.PlayerToken, out var makerPlayer))
+        {
+            if (maker.Side == OrderSide.Buy)
+                ApplyBuyerFill(maker, price, quantity, buyerFee);
+            else
+                ApplySellerFill(maker, price, quantity, sellerFee);
+        }
+
+        if (taker.PlayerToken != maker.PlayerToken)
+        {
+            if (taker.PlayerToken != SystemToken && _players.TryGetValue(taker.PlayerToken, out var takerPlayer))
+                takerPlayer.AddMonthlyTradeCount();
+            if (maker.PlayerToken != SystemToken && _players.TryGetValue(maker.PlayerToken, out var makerTradePlayer))
+                makerTradePlayer.AddMonthlyTradeCount();
+        }
+
+        _orderBook.UpdateLastPrice(price);
+        _orderBook.IncrementVolume(quantity);
+
+        var trade = new Trade
+        {
+            BuyOrderId = taker.Side == OrderSide.Buy ? taker.OrderId : maker.OrderId,
+            SellOrderId = taker.Side == OrderSide.Sell ? taker.OrderId : maker.OrderId,
+            BuyerToken = taker.Side == OrderSide.Buy ? taker.PlayerToken : maker.PlayerToken,
+            SellerToken = taker.Side == OrderSide.Sell ? taker.PlayerToken : maker.PlayerToken,
+            Price = price,
+            Quantity = quantity,
+            Tick = currentDay,
+            BuyerFee = buyerFee,
+            SellerFee = sellerFee
+        };
+
+        _tradesThisDay.Add(trade);
+        OnTradeExecuted?.Invoke(trade);
     }
 
     private long CalculateFee(string playerToken, long tradeAmount)
     {
         if (playerToken == SystemToken)
             return 0;
-        if (_players.TryGetValue(playerToken, out var player))
-        {
-            long rawFee = (long)(tradeAmount * player.TransactionFeeRate);
-            var feeCard = player.ActiveCards
-                .OfType<StrategyCards.FeeExemption>()
-                .FirstOrDefault();
-            if (feeCard != null)
-                return feeCard.CalculateEffectiveFee(rawFee);
-            return rawFee;
-        }
-        return 0;
+
+        if (!_players.TryGetValue(playerToken, out var player))
+            return 0;
+
+        return (long)(tradeAmount * player.TransactionFeeRate);
     }
 
-    /// <summary>
-    /// Execute a single trade between a buy order and a sell order.
-    ///
-    /// Asset flow for BUYER (non-SYSTEM):
-    ///   At order placement: FreezeMora(orderPrice * orderQuantity)
-    ///   At trade execution for matchedQty units at tradePrice:
-    ///     1. Refund the price difference: UnfreezeMora((orderPrice - tradePrice) * matchedQty)
-    ///        (if orderPrice > tradePrice, excess frozen Mora returns to available)
-    ///     2. Permanently spend: SpendFrozenMora(tradePrice * matchedQty + buyerFee)
-    ///        (actual cost + fee are removed from frozen Mora entirely)
-    ///     3. If buyerFee > (orderPrice - tradePrice) * matchedQty, the fee partly
-    ///        comes from available Mora. Handle via: SpendFrozenMora for the frozen part,
-    ///        deduct remainder from Mora.
-    ///     4. Receive gold: AddGold(matchedQty)
-    ///
-    ///   Detailed math:
-    ///     frozenForPortion = orderPrice * matchedQty
-    ///     actualCostPlusFee = tradePrice * matchedQty + buyerFee
-    ///     If frozenForPortion >= actualCostPlusFee:
-    ///       SpendFrozenMora(actualCostPlusFee)
-    ///       UnfreezeMora(frozenForPortion - actualCostPlusFee)  // refund excess
-    ///     Else:
-    ///       SpendFrozenMora(frozenForPortion)  // spend all frozen
-    ///       Mora -= (actualCostPlusFee - frozenForPortion)  // fee exceeds frozen surplus
-    ///       (This case is rare: only when fee > price difference * qty)
-    ///
-    /// Asset flow for SELLER (non-SYSTEM):
-    ///   At order placement: FreezeGold(orderQuantity)
-    ///   At trade execution for matchedQty units at tradePrice:
-    ///     1. SpendFrozenGold(matchedQty)  -- gold is sold, permanently leaves frozen pool
-    ///     2. AddMora(tradePrice * matchedQty - sellerFee)  -- receive proceeds minus fee
-    /// </summary>
-    private void ExecuteTrade(Order buyOrder, Order sellOrder, long price, int quantity,
-        long buyerFee, long sellerFee, int currentTick)
+    private void ApplyBuyerFill(Order order, long price, int quantity, long fee)
     {
-        // --- Update order quantities ---
-        buyOrder.RemainingQuantity -= quantity;
-        sellOrder.RemainingQuantity -= quantity;
+        if (order.PlayerToken == SystemToken)
+            return;
 
-        buyOrder.Status = buyOrder.RemainingQuantity == 0
-            ? OrderStatus.Filled
-            : OrderStatus.PartiallyFilled;
-        sellOrder.Status = sellOrder.RemainingQuantity == 0
-            ? OrderStatus.Filled
-            : OrderStatus.PartiallyFilled;
+        if (!_players.TryGetValue(order.PlayerToken, out var player))
+            return;
 
-        // Remove fully filled orders from the book.
-        if (buyOrder.Status == OrderStatus.Filled)
-            _orderBook.RemoveOrder(buyOrder.OrderId);
-        if (sellOrder.Status == OrderStatus.Filled)
-            _orderBook.RemoveOrder(sellOrder.OrderId);
+        long frozenPortion = order.Price * quantity;
+        long actualCost = price * quantity + fee;
 
-        // --- Transfer buyer assets ---
-        if (buyOrder.PlayerToken != SystemToken
-            && _players.TryGetValue(buyOrder.PlayerToken, out var buyer))
+        if (frozenPortion >= actualCost)
         {
-            long frozenForPortion = buyOrder.Price * quantity;
-            long actualCost = price * quantity;
-            long totalDeduction = actualCost + buyerFee;
-
-            if (frozenForPortion >= totalDeduction)
-            {
-                // Common case: frozen amount covers cost + fee; refund the excess.
-                buyer.SpendFrozenMora(totalDeduction);
-                long refund = frozenForPortion - totalDeduction;
-                if (refund > 0)
-                    buyer.UnfreezeMora(refund);
-            }
-            else
-            {
-                // Edge case: fee makes total exceed frozen amount.
-                // Spend everything that was frozen, deduct remainder from available Mora.
-                buyer.SpendFrozenMora(frozenForPortion);
-                long shortfall = totalDeduction - frozenForPortion;
-                buyer.FreezeMora(shortfall);
-                buyer.SpendFrozenMora(shortfall);
-            }
-
-            buyer.AddGold(quantity);
+            player.SpendFrozenMora(actualCost);
+            long refund = frozenPortion - actualCost;
+            if (refund > 0)
+                player.UnfreezeMora(refund);
+        }
+        else
+        {
+            player.SpendFrozenMora(frozenPortion);
+            long shortfall = actualCost - frozenPortion;
+            player.AddMora(-shortfall);
         }
 
-        // --- Transfer seller assets ---
-        if (sellOrder.PlayerToken != SystemToken
-            && _players.TryGetValue(sellOrder.PlayerToken, out var seller))
-        {
-            // Gold was frozen at order placement; now it's sold permanently.
-            seller.SpendFrozenGold(quantity);
+        player.AddGold(quantity);
+    }
 
-            // Receive Mora proceeds minus fee.
-            long proceeds = price * quantity - sellerFee;
-            if (proceeds > 0)
-                seller.AddMora(proceeds);
-        }
+    private void ApplySellerFill(Order order, long price, int quantity, long fee)
+    {
+        if (order.PlayerToken == SystemToken)
+            return;
 
-        // Increment trade count only for non-wash, non-system trades
-        bool isWashTrade = buyOrder.PlayerToken == sellOrder.PlayerToken;
-        if (!isWashTrade)
-        {
-            if (buyOrder.PlayerToken != SystemToken && _players.TryGetValue(buyOrder.PlayerToken, out var b))
-                b.TotalTradeCount++;
-            if (sellOrder.PlayerToken != SystemToken && _players.TryGetValue(sellOrder.PlayerToken, out var s))
-                s.TotalTradeCount++;
-        }
+        if (!_players.TryGetValue(order.PlayerToken, out var player))
+            return;
 
-        // --- Update order book state ---
-        _orderBook.UpdateLastPrice(price);
-        _orderBook.IncrementVolume(quantity);
+        player.SpendFrozenGold(quantity);
+        long proceeds = price * quantity - fee;
+        if (proceeds != 0)
+            player.AddMora(proceeds);
+    }
 
-        // --- Create trade record ---
-        var trade = new Trade
-        {
-            BuyOrderId = buyOrder.OrderId,
-            SellOrderId = sellOrder.OrderId,
-            BuyerToken = buyOrder.PlayerToken,
-            SellerToken = sellOrder.PlayerToken,
-            Price = price,
-            Quantity = quantity,
-            Tick = currentTick,
-            BuyerFee = buyerFee,
-            SellerFee = sellerFee
-        };
+    private void RefundPendingOrder(Order order)
+    {
+        if (order.PlayerToken == SystemToken)
+            return;
 
-        _tradesThisTick.Add(trade);
-        OnTradeExecuted?.Invoke(trade);
+        if (!_players.TryGetValue(order.PlayerToken, out var player))
+            return;
+
+        if (order.Side == OrderSide.Buy)
+            player.UnfreezeMora(order.Price * order.RemainingQuantity);
+        else
+            player.UnfreezeGold(order.RemainingQuantity);
+    }
+
+    private void RefundActiveOrder(Order order)
+    {
+        RefundPendingOrder(order);
+    }
+
+    private void RefundUnfilledImmediate(Order order)
+    {
+        if (order.PlayerToken == SystemToken || order.RemainingQuantity <= 0)
+            return;
+
+        if (!_players.TryGetValue(order.PlayerToken, out var player))
+            return;
+
+        if (order.Side == OrderSide.Buy)
+            player.UnfreezeMora(order.Price * order.RemainingQuantity);
+        else
+            player.UnfreezeGold(order.RemainingQuantity);
     }
 }

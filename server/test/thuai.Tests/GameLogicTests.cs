@@ -162,13 +162,13 @@ public class OrderBookTests
     }
 
     [Fact]
-    public void GetVisibleBids_IcebergOrder_ShowsReducedQuantity()
+    public void GetVisibleBids_CurrentRules_ShowFullQuantity()
     {
         // A normal order with quantity 100 -> VisibleQuantity = 100
         var normal = new Order("p1", OrderSide.Buy, price: 950, quantity: 100,
             submitTick: 0, networkDelay: 0, isIceberg: false);
 
-        // An iceberg order with quantity 100 -> VisibleQuantity = max(1, 100/10) = 10
+        // Iceberg visibility no longer changes the displayed size in the new rules.
         var iceberg = new Order("p2", OrderSide.Buy, price: 900, quantity: 100,
             submitTick: 0, networkDelay: 0, isIceberg: true);
 
@@ -184,9 +184,9 @@ public class OrderBookTests
         Assert.Equal(950, visibleBids[0].Price);
         Assert.Equal(100, visibleBids[0].Quantity);
 
-        // Level at 900 (iceberg) should show reduced quantity
+        // Level at 900 still shows full quantity under the new rules.
         Assert.Equal(900, visibleBids[1].Price);
-        Assert.Equal(10, visibleBids[1].Quantity);
+        Assert.Equal(100, visibleBids[1].Quantity);
     }
 
     [Fact]
@@ -279,9 +279,9 @@ public class MatchEngineTests
     }
 
     [Fact]
-    public void SubmitOrder_ExceedsRateLimit_ReturnsNull()
+    public void SubmitOrder_NoLongerRejectsAtSubmitTime()
     {
-        // MaxOrdersPerTick defaults to 5. Submit 5, then the 6th should fail.
+        // The new rules enforce action limits on the effective trading day, not at submit time.
         for (int i = 0; i < 5; i++)
         {
             var o = _engine.SubmitOrder("buyer", OrderSide.Buy, price: 100, quantity: 1,
@@ -289,10 +289,10 @@ public class MatchEngineTests
             Assert.NotNull(o);
         }
 
-        var rejected = _engine.SubmitOrder("buyer", OrderSide.Buy, price: 100, quantity: 1,
+        var accepted = _engine.SubmitOrder("buyer", OrderSide.Buy, price: 100, quantity: 1,
             currentTick: 0);
 
-        Assert.Null(rejected);
+        Assert.NotNull(accepted);
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class MatchEngineTests
 
         // Submit a buy at tick 1 with delay 5 -> arrives at tick 6
         _engine.SubmitOrder("buyer", OrderSide.Buy, price: 950, quantity: 10,
-            currentTick: 1);
+            currentTick: 1, networkDelay: 5);
 
         // Process ticks 1-5: the buy order should NOT be matched yet
         for (int tick = 1; tick <= 5; tick++)
@@ -542,9 +542,9 @@ public class PlayerTests
         Assert.Equal(0, player.FrozenMora);
         Assert.Equal(1_000, player.Gold);
         Assert.Equal(0, player.FrozenGold);
-        Assert.Equal(5, player.NetworkDelay);
+        Assert.Equal(1, player.NetworkDelay);
         Assert.Equal(0.0002, player.TransactionFeeRate);
-        Assert.Equal(5, player.MaxOrdersPerTick);
+        Assert.Equal(2, player.MaxOrdersPerTick);
         Assert.Equal(1, player.MaxReportsPerTick);
         Assert.Equal(0, player.OrdersSentThisTick);
         Assert.Equal(0, player.ReportsSentThisTick);
@@ -682,16 +682,16 @@ public class NewsSystemTests
     [Fact]
     public void Tick_BeforeInterval_ReturnsNull()
     {
-        // Set a large interval so that news won't fire at tick 1
+        // The new rule set uses fixed monthly news days 1, 11, and 21.
         var news = new NewsSystem(intervalMin: 100, intervalMax: 200, researchWindow: 50);
 
-        // Tick at 0 should not produce news (NextNewsTick is at least 100)
+        // Day 0 has no scheduled news.
         var result = news.Tick(0);
         Assert.Null(result);
 
-        // Tick at 1 should also not produce news
+        // Day 1 is the first scheduled release day.
         result = news.Tick(1);
-        Assert.Null(result);
+        Assert.NotNull(result);
     }
 
     [Fact]

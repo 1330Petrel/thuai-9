@@ -144,15 +144,13 @@ public class Program
 
     private static void BroadcastGameState(AgentServer agentServer, Game game)
     {
-        // 1. Broadcast global game state to all
         var gameState = new GameStateMessage
         {
             Stage = game.Stage.ToString(),
+            CurrentMonth = game.CurrentMonthNumber,
             CurrentDay = game.CurrentDayNumber,
             CurrentTick = game.CurrentTick,
-            TotalTicks = game.Stage == GameStage.TradingDay
-                ? game.CurrentTradingDay?.CurrentTick ?? 0
-                : 0,
+            TotalTicks = 30,
             Scores = game.Scoreboard.Select(kv => new PlayerScore
             {
                 Token = kv.Key,
@@ -161,18 +159,23 @@ public class Program
         };
         agentServer.PublishToAll(gameState);
 
-        if (game.Stage == GameStage.Settlement && game.CurrentTradingDay != null)
+        if (game.CurrentTradingDay != null && game.CurrentTradingDay.HasPendingNotifications)
         {
-            agentServer.PublishToAll(BuildDaySettlementMessage(game));
+            PublishTradingDayNotifications(agentServer, game);
+            game.CurrentTradingDay.MarkNotificationsPublished();
         }
 
-        // 2. During trading day, broadcast market state and per-player state
-        if (game.Stage == GameStage.TradingDay && game.CurrentTradingDay != null)
+        if (game.HasPendingSettlementNotification && game.CurrentTradingDay != null)
+        {
+            agentServer.PublishToAll(BuildDaySettlementMessage(game));
+            game.MarkSettlementNotificationPublished();
+        }
+
+        if ((game.Stage == GameStage.TradingDay || game.Stage == GameStage.Settlement) && game.CurrentTradingDay != null)
         {
             var day = game.CurrentTradingDay;
             var orderBook = day.OrderBook;
 
-            // Build base market data
             var baseBids = orderBook.GetVisibleBids().Select(l => new PriceLevel
             {
                 Price = l.Price,
@@ -184,32 +187,12 @@ public class Program
                 Quantity = l.Quantity
             }).ToList();
 
-            // Pre-compute fake sell levels by owner for malicious shorting
-            var fakeLevelsByOwner = day.FakeSellLevels
-                .GroupBy(f => f.OwnerToken)
-                .ToDictionary(g => g.Key, g => g.Select(f => new PriceLevel
-                {
-                    Price = f.Price,
-                    Quantity = f.Quantity
-                }).ToList());
-
-            // Per-player: market state (with possible fake levels) + private state
             foreach (var player in game.Players.Values)
             {
-                // Build per-player asks (merge fake sell levels from opponents)
-                var playerAsks = new List<PriceLevel>(baseAsks);
-                foreach (var (ownerToken, fakeLevels) in fakeLevelsByOwner)
-                {
-                    if (ownerToken != player.Token)
-                        playerAsks.AddRange(fakeLevels);
-                }
-                if (playerAsks.Count != baseAsks.Count)
-                    playerAsks.Sort((a, b) => a.Price.CompareTo(b.Price));
-
                 var marketState = new MarketStateMessage
                 {
                     Bids = baseBids,
-                    Asks = playerAsks,
+                    Asks = baseAsks,
                     LastPrice = orderBook.LastPrice,
                     MidPrice = orderBook.MidPrice,
                     Volume = orderBook.TotalVolume,
@@ -226,36 +209,28 @@ public class Program
                     FrozenGold = player.FrozenGold,
                     LockedGold = player.LockedGold,
                     Nav = player.CalculateNAV(orderBook.MidPrice),
+                    NetworkDelay = player.NetworkDelay,
+                    ImmediateOrdersUsedToday = player.ImmediateOrdersUsedToday,
+                    RestingOrdersUsedToday = player.RestingOrdersUsedToday,
+                    BonusImmediateOrdersToday = player.BonusImmediateOrdersToday,
+                    MonthlyTradeCount = player.MonthlyTradeCount,
                     ActiveCards = player.ActiveCards.Select(c => c.Name).ToList(),
                     PendingOrders = pendingOrders.Select(o => new OrderInfo
                     {
                         OrderId = o.OrderId,
+                        ArrivalTick = o.ArrivalTick,
                         Side = o.Side.ToString(),
                         Price = o.Price,
                         Quantity = o.Quantity,
                         RemainingQuantity = o.RemainingQuantity,
-                        Status = o.Status.ToString()
+                        Status = o.Status.ToString(),
+                        Intent = o.Intent?.ToString() ?? ""
                     }).ToList()
                 };
                 agentServer.Publish(playerState, player.Token);
             }
-
-            // Insider news previews: send early news content to players with InsiderInfo card.
-            foreach (var (playerToken, preview) in day.PendingInsiderPreviews)
-            {
-                var previewMsg = new NewsBroadcastMessage
-                {
-                    NewsId = preview.NewsId,
-                    Content = preview.Content,
-                    PublishTick = preview.PublishTick
-                };
-                agentServer.Publish(previewMsg, playerToken);
-            }
-
-            // (Malicious shorting fake levels are already merged into per-player market state above)
         }
 
-        // 3. During strategy selection, broadcast options
         if (game.Stage == GameStage.StrategySelection)
         {
             var cardManager = game.CardManager;
@@ -290,50 +265,131 @@ public class Program
         }
     }
 
+    private static void PublishTradingDayNotifications(AgentServer agentServer, Game game)
+    {
+        var tradingDay = game.CurrentTradingDay!;
+
+        foreach (var news in tradingDay.PublishedNewsThisDay)
+        {
+            foreach (var player in game.Players.Values)
+            {
+                News delivered = news;
+                if (!news.IsFake && player.ConsumePendingFakeBroadcast())
+                {
+                    delivered = tradingDay.NewsSystem.CreateSpoofedView(news);
+                }
+
+                agentServer.Publish(new NewsBroadcastMessage
+                {
+                    Month = game.CurrentMonthNumber,
+                    Day = delivered.PublishTick,
+                    NewsId = delivered.NewsId,
+                    Content = delivered.Content,
+                    PublishTick = delivered.PublishTick
+                }, player.Token);
+            }
+        }
+
+        foreach (var (playerToken, preview) in tradingDay.PendingInsiderPreviews)
+        {
+            agentServer.Publish(new NewsBroadcastMessage
+            {
+                Month = game.CurrentMonthNumber,
+                Day = preview.PublishTick,
+                NewsId = preview.NewsId,
+                Content = preview.Content,
+                PublishTick = preview.PublishTick
+            }, playerToken);
+        }
+
+        foreach (var report in tradingDay.SettledReportsThisDay)
+        {
+            agentServer.Publish(new ReportResultMessage
+            {
+                NewsId = report.NewsId,
+                SubmissionRank = report.SubmissionRank,
+                SubmitTick = report.SubmitTick,
+                SettlementTick = report.SettlementDay,
+                Prediction = report.Prediction.ToString(),
+                IsCorrect = report.IsCorrect ?? false,
+                Reward = report.Reward,
+                ActualChange = report.ActualChange
+            }, report.PlayerToken);
+        }
+
+        foreach (var trade in tradingDay.TradesThisDay)
+        {
+            if (trade.BuyerToken != "SYSTEM")
+            {
+                agentServer.Publish(new TradeNotificationMessage
+                {
+                    TradeId = trade.TradeId,
+                    OrderId = trade.BuyOrderId,
+                    Price = trade.Price,
+                    Quantity = trade.Quantity,
+                    Side = "Buy",
+                    Fee = trade.BuyerFee
+                }, trade.BuyerToken);
+            }
+
+            if (trade.SellerToken != "SYSTEM")
+            {
+                agentServer.Publish(new TradeNotificationMessage
+                {
+                    TradeId = trade.TradeId,
+                    OrderId = trade.SellOrderId,
+                    Price = trade.Price,
+                    Quantity = trade.Quantity,
+                    Side = "Sell",
+                    Fee = trade.SellerFee
+                }, trade.SellerToken);
+            }
+        }
+
+        foreach (var effect in tradingDay.SkillEffectsThisDay)
+        {
+            agentServer.PublishToAll(new SkillEffectMessage
+            {
+                SkillName = effect.SkillName,
+                SourcePlayer = effect.SourcePlayer,
+                TargetPlayer = effect.TargetPlayer,
+                Description = effect.Description
+            });
+        }
+    }
+
     private static DaySettlementMessage BuildDaySettlementMessage(Game game)
     {
+        var settlement = game.LatestSettlement!;
         var day = game.CurrentTradingDay!;
         var midPrice = day.OrderBook.MidPrice;
         var players = game.Players.Values
             .Select(player => new DaySettlementPlayer
             {
                 Token = player.Token,
-                Nav = player.CalculateNAV(midPrice),
+                Nav = settlement.MonthNavs.GetValueOrDefault(player.Token, player.CalculateNAV(midPrice)),
                 Mora = player.Mora,
                 Gold = player.Gold,
                 FrozenMora = player.FrozenMora,
                 FrozenGold = player.FrozenGold,
                 LockedGold = player.LockedGold,
-                TradeCount = player.TotalTradeCount,
+                TradeCount = player.MonthlyTradeCount,
                 ActiveCards = player.ActiveCards.Select(card => card.Name).ToList()
             })
             .OrderByDescending(player => player.Nav)
             .ThenByDescending(player => player.TradeCount)
             .ToList();
 
-        var winner = "";
-        var reason = "tie";
-        if (players.Count >= 2)
-        {
-            if (players[0].Nav > players[1].Nav)
-            {
-                winner = players[0].Token;
-                reason = "higher NAV";
-            }
-            else if (players[0].Nav == players[1].Nav
-                && players[0].TradeCount > players[1].TradeCount)
-            {
-                winner = players[0].Token;
-                reason = "trade-count tiebreaker";
-            }
-        }
-
         return new DaySettlementMessage
         {
-            Day = game.CurrentDayNumber,
-            WinnerToken = winner,
-            Reason = reason,
-            Players = players
+            Day = settlement.Month,
+            Month = settlement.Month,
+            WinnerToken = settlement.WinnerToken,
+            Reason = settlement.Reason,
+            Players = players,
+            CumulativeNavs = settlement.CumulativeNavs,
+            FinalBonusWinnerToken = settlement.FinalBonusWinnerToken,
+            FinalBonusPoints = settlement.FinalBonusPoints
         };
     }
 
@@ -343,6 +399,7 @@ public class Program
         {
             Tick = game.CurrentTick,
             Stage = game.Stage.ToString(),
+            Month = game.CurrentMonthNumber,
             Day = game.CurrentDayNumber,
             Scores = game.Scoreboard,
             TradingDayTick = game.CurrentTradingDay?.CurrentTick,
@@ -359,6 +416,7 @@ public class Program
                 Gold = p.Gold,
                 FrozenMora = p.FrozenMora,
                 FrozenGold = p.FrozenGold,
+                LockedGold = p.LockedGold,
                 Nav = game.CurrentTradingDay != null
                     ? p.CalculateNAV(game.CurrentTradingDay.OrderBook.MidPrice)
                     : p.Mora
