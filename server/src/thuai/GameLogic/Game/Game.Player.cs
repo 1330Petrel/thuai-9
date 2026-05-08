@@ -18,9 +18,10 @@ public partial class Game
             if (Stage != GameStage.Waiting) return false;
             if (Players.ContainsKey(token)) return false;
 
-            var player = new Player(token, _nextPlayerId++);
+            var player = new Player(token, _nextPlayerId++, _settings);
             Players[token] = player;
             Scoreboard[token] = 0;
+            CumulativeNavs[token] = 0;
             return true;
         }
     }

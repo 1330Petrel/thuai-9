@@ -1,110 +1,90 @@
 namespace Thuai.GameLogic.StrategyCards;
 
-/// <summary>
-/// 高频专线 — Max orders per tick raised to 10.
-/// </summary>
-public class HighFrequencyLine : StrategyCard
-{
-    public override string Name => "高频专线";
-    public override CardCategory Category => CardCategory.Infrastructure;
-    public override string Description => "交易指令的发送上限提升至每帧10条";
-
-    public override void OnAcquire(Player player)
-    {
-        player.MaxOrdersPerTick = 10;
-    }
-}
-
-/// <summary>
-/// 低延迟主板 — Orders treated as arriving 1 tick earlier for time-priority.
-/// Implemented by reducing NetworkDelay by 1 (since ArrivalTick = SubmitTick + NetworkDelay).
-/// </summary>
-public class LowLatencyBoard : StrategyCard
-{
-    public override string Name => "低延迟主板";
-    public override CardCategory Category => CardCategory.Infrastructure;
-    public override string Description => "你的限价单在时间优先排序时视为提前1帧到达";
-
-    public override void OnAcquire(Player player)
-    {
-        player.NetworkDelay = Math.Max(0, player.NetworkDelay - 1);
-    }
-}
-
-/// <summary>
-/// 内幕消息 — Receive news 3 ticks early.
-/// The effect is checked at news broadcast time by the GameController/TradingDay.
-/// Check via: player.ActiveCards.Any(c => c is InsiderInfo)
-/// </summary>
 public class InsiderInfo : StrategyCard
 {
     public override string Name => "内幕消息";
     public override CardCategory Category => CardCategory.Infrastructure;
-    public override string Description => "你将比对手提前3帧收到璃月快报的文本内容";
+    public override string Description => "花费摩拉提前3天获取下一条快讯，或以低价赌一半概率的伪消息";
+    public override bool IsPassive => false;
 
-    public int EarlyTicks => 3;
+    public bool UsedThisMonth { get; private set; }
+    public int PreviewNewsDay { get; private set; }
+    public int PreviewDeliveryDay { get; private set; }
+    public bool PreviewIsFake { get; private set; }
+
+    public long PremiumCost => 10_000;
+    public long CheapCost => 500;
+
+    public bool CanActivate(int currentDay, int nextNewsDay) =>
+        !UsedThisMonth && nextNewsDay > currentDay + 3;
+
+    public void Activate(Player player, int currentDay, int nextNewsDay, bool cheapMode, bool previewIsFake)
+    {
+        UsedThisMonth = true;
+        PreviewNewsDay = nextNewsDay;
+        PreviewDeliveryDay = nextNewsDay - 3;
+        PreviewIsFake = previewIsFake;
+        player.SetInsiderPriorityDay(nextNewsDay);
+    }
+
+    public bool TryConsumePreview(int currentDay, out bool isFake)
+    {
+        isFake = false;
+        if (!UsedThisMonth || currentDay != PreviewDeliveryDay)
+            return false;
+
+        isFake = PreviewIsFake;
+        return true;
+    }
+
+    public void ResetMonthly()
+    {
+        UsedThisMonth = false;
+        PreviewNewsDay = 0;
+        PreviewDeliveryDay = 0;
+        PreviewIsFake = false;
+        CurrentCooldown = 0;
+    }
 }
 
-/// <summary>
-/// 量化集群 — Research window extends from 50 to 80 ticks; reward time decay halved.
-/// The effect is checked at research report submission time by the ResearchSystem.
-/// Check via: player.ActiveCards.OfType&lt;QuantCluster&gt;().FirstOrDefault()
-/// </summary>
-public class QuantCluster : StrategyCard
-{
-    public override string Name => "量化集群";
-    public override CardCategory Category => CardCategory.Infrastructure;
-    public override string Description => "研报指令有效提交窗口延长至80帧，且奖励金的时间惩罚衰减速度减半";
-
-    public int ExtendedResearchWindow => 80;
-    public double DecayMultiplier => 0.5;
-}
-
-/// <summary>
-/// 闪电交易 — Active skill. Network delay drops to 0 for 50 ticks after activation.
-/// One-shot per trading day.
-/// </summary>
 public class FlashTrading : StrategyCard
 {
     public override string Name => "闪电交易";
     public override CardCategory Category => CardCategory.Infrastructure;
-    public override string Description => "激活后50帧内网络延迟降为0帧";
+    public override string Description => "接下来的3天每天可多进行一次即时交易";
     public override bool IsPassive => false;
-    public override int Cooldown => 0;
 
-    private int _originalDelay;
-    private int _effectEndTick = -1;
-    private bool _used;
+    private bool _usedThisMonth;
+    private int _activeFromDay = -1;
+    private int _activeUntilDay = -1;
 
-    public bool IsUsed => _used;
-    public int EffectDuration => 50;
+    public long ActivationCost => 1_000;
+
+    public bool CanActivateThisMonth => !_usedThisMonth;
 
     public override void OnActivate(Player player, int currentTick)
     {
-        if (_used) return;
-
-        _used = true;
-        _originalDelay = player.NetworkDelay;
-        player.NetworkDelay = 0;
-        _effectEndTick = currentTick + EffectDuration;
-        CurrentCooldown = int.MaxValue; // Prevent re-activation via CanActivate()
+        _usedThisMonth = true;
+        _activeFromDay = currentTick + 1;
+        _activeUntilDay = currentTick + 3;
     }
 
     public override void OnTick(Player player, int currentTick)
     {
-        base.OnTick(player, currentTick);
-
-        if (_effectEndTick > 0 && currentTick >= _effectEndTick)
+        if (_activeFromDay >= 0 && currentTick >= _activeFromDay && currentTick <= _activeUntilDay)
         {
-            player.NetworkDelay = _originalDelay;
-            _effectEndTick = -1;
+            player.BonusImmediateOrdersToday = 1;
         }
     }
 
-    public void ResetDaily()
+    public bool IsActive(int currentDay) =>
+        _activeFromDay >= 0 && currentDay >= _activeFromDay && currentDay <= _activeUntilDay;
+
+    public void ResetMonthly()
     {
-        _used = false;
-        _effectEndTick = -1;
+        _usedThisMonth = false;
+        _activeFromDay = -1;
+        _activeUntilDay = -1;
         CurrentCooldown = 0;
     }
 }

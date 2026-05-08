@@ -9,6 +9,9 @@ public record GameStateMessage : Message
     [JsonPropertyName("stage")]
     public string Stage { get; init; } = "";
 
+    [JsonPropertyName("currentMonth")]
+    public int CurrentMonth { get; init; }
+
     [JsonPropertyName("currentDay")]
     public int CurrentDay { get; init; }
 
@@ -85,6 +88,21 @@ public record PlayerStateMessage : Message
     [JsonPropertyName("nav")]
     public long Nav { get; init; }
 
+    [JsonPropertyName("networkDelay")]
+    public int NetworkDelay { get; init; }
+
+    [JsonPropertyName("immediateOrdersUsedToday")]
+    public int ImmediateOrdersUsedToday { get; init; }
+
+    [JsonPropertyName("restingOrdersUsedToday")]
+    public int RestingOrdersUsedToday { get; init; }
+
+    [JsonPropertyName("bonusImmediateOrdersToday")]
+    public int BonusImmediateOrdersToday { get; init; }
+
+    [JsonPropertyName("monthlyTradeCount")]
+    public int MonthlyTradeCount { get; init; }
+
     [JsonPropertyName("activeCards")]
     public List<string>? ActiveCards { get; init; }
 
@@ -96,6 +114,9 @@ public record OrderInfo
 {
     [JsonPropertyName("orderId")]
     public long OrderId { get; init; }
+
+    [JsonPropertyName("arrivalTick")]
+    public int ArrivalTick { get; init; }
 
     [JsonPropertyName("side")]
     public string Side { get; init; } = "";
@@ -111,11 +132,20 @@ public record OrderInfo
 
     [JsonPropertyName("status")]
     public string Status { get; init; } = "";
+
+    [JsonPropertyName("intent")]
+    public string Intent { get; init; } = "";
 }
 
 public record NewsBroadcastMessage : Message
 {
     public override string MessageType => "NEWS_BROADCAST";
+
+    [JsonPropertyName("month")]
+    public int Month { get; init; }
+
+    [JsonPropertyName("day")]
+    public int Day { get; init; }
 
     [JsonPropertyName("newsId")]
     public int NewsId { get; init; }
@@ -133,6 +163,15 @@ public record ReportResultMessage : Message
 
     [JsonPropertyName("newsId")]
     public int NewsId { get; init; }
+
+    [JsonPropertyName("submissionRank")]
+    public int SubmissionRank { get; init; }
+
+    [JsonPropertyName("submitTick")]
+    public int SubmitTick { get; init; }
+
+    [JsonPropertyName("settlementTick")]
+    public int SettlementTick { get; init; }
 
     [JsonPropertyName("prediction")]
     public string Prediction { get; init; } = "";
@@ -206,6 +245,9 @@ public record SkillEffectMessage : Message
     [JsonPropertyName("sourcePlayer")]
     public string SourcePlayer { get; init; } = "";
 
+    [JsonPropertyName("targetPlayer")]
+    public string? TargetPlayer { get; init; }
+
     [JsonPropertyName("description")]
     public string Description { get; init; } = "";
 }
@@ -217,6 +259,9 @@ public record DaySettlementMessage : Message
     [JsonPropertyName("day")]
     public int Day { get; init; }
 
+    [JsonPropertyName("month")]
+    public int Month { get; init; }
+
     [JsonPropertyName("winnerToken")]
     public string WinnerToken { get; init; } = "";
 
@@ -225,6 +270,15 @@ public record DaySettlementMessage : Message
 
     [JsonPropertyName("players")]
     public List<DaySettlementPlayer>? Players { get; init; }
+
+    [JsonPropertyName("cumulativeNavs")]
+    public Dictionary<string, long>? CumulativeNavs { get; init; }
+
+    [JsonPropertyName("finalBonusWinnerToken")]
+    public string FinalBonusWinnerToken { get; init; } = "";
+
+    [JsonPropertyName("finalBonusPoints")]
+    public int FinalBonusPoints { get; init; }
 }
 
 public record DaySettlementPlayer

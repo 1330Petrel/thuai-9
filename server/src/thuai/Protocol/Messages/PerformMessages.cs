@@ -58,6 +58,9 @@ public record ActivateSkillMessage : PerformMessage
     [JsonPropertyName("skillName")]
     public string SkillName { get; init; } = "";
 
-    [JsonPropertyName("direction")]
-    public string? Direction { get; init; }  // "buy" or "sell" for dark pool
+    [JsonPropertyName("targetToken")]
+    public string? TargetToken { get; init; }
+
+    [JsonPropertyName("variant")]
+    public string? Variant { get; init; }
 }
