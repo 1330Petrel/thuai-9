@@ -2,16 +2,16 @@ on:
   push:
     paths:
       - .github/workflows/build.yml
-      - client/**
-      - map_editor/**
-      - sdk/**
+      - web/**
+      - sdk-cpp/**
+      - sdk-python/**
       - server/**
   pull_request_target:
     paths:
       - .github/workflows/build.yml
-      - client/**
-      - map_editor/**
-      - sdk/**
+      - web/**
+      - sdk-cpp/**
+      - sdk-python/**
       - server/**
   workflow_dispatch:
 
