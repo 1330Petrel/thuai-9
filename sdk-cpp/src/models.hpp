@@ -1,121 +1,126 @@
 #pragma once
+
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
-#include <optional>
 
 namespace thuai {
 
 struct PriceLevel {
-    long price = 0;
-    int quantity = 0;
+  std::int64_t price = 0;
+  int quantity = 0;
 };
 
 struct OrderInfo {
-    long orderId = 0;
-    int arrivalTick = 0;
-    std::string side;
-    long price = 0;
-    int quantity = 0;
-    int remainingQuantity = 0;
-    std::string status;
-    std::string intent;
+  std::int64_t orderId = 0;
+  int arrivalTick = 0;
+  std::string side;
+  std::int64_t price = 0;
+  int quantity = 0;
+  int remainingQuantity = 0;
+  std::string status;
+  std::string intent;
 };
 
 struct CardOption {
-    std::string name;
-    std::string description;
-    std::string category;
+  std::string name;
+  std::string description;
+  std::string category;
 };
 
 struct PlayerScore {
-    std::string token;
-    int score = 0;
+  std::string token;
+  int score = 0;
 };
 
 struct GameState {
-    std::string stage;
-    int currentMonth = 0;
-    int currentDay = 0;
-    int currentTick = 0;
-    int totalTicks = 0;
-    std::vector<PlayerScore> scores;
+  std::string stage;
+  int currentMonth = 0;
+  int currentDay = 0;
+  int currentTick = 0;
+  int totalTicks = 0;
+  std::vector<PlayerScore> scores;
 };
 
 struct MarketState {
-    std::vector<PriceLevel> bids;
-    std::vector<PriceLevel> asks;
-    long lastPrice = 0;
-    long midPrice = 0;
-    int volume = 0;
-    int tick = 0;
+  std::vector<PriceLevel> bids;
+  std::vector<PriceLevel> asks;
+  std::int64_t lastPrice = 0;
+  std::int64_t midPrice = 0;
+  int volume = 0;
+  int tick = 0;
 };
 
 struct PlayerState {
-    long mora = 0;
-    long frozenMora = 0;
-    int gold = 0;
-    int frozenGold = 0;
-    int lockedGold = 0;
-    long nav = 0;
-    int networkDelay = 0;
-    int immediateOrdersUsedToday = 0;
-    int restingOrdersUsedToday = 0;
-    int bonusImmediateOrdersToday = 0;
-    int monthlyTradeCount = 0;
-    std::vector<std::string> activeCards;
-    std::vector<OrderInfo> pendingOrders;
+  std::int64_t mora = 0;
+  std::int64_t frozenMora = 0;
+  int gold = 0;
+  int frozenGold = 0;
+  int lockedGold = 0;
+  std::int64_t nav = 0;
+  int networkDelay = 0;
+  int immediateOrdersUsedToday = 0;
+  int restingOrdersUsedToday = 0;
+  int bonusImmediateOrdersToday = 0;
+  int monthlyTradeCount = 0;
+  std::vector<std::string> activeCards;
+  std::vector<OrderInfo> pendingOrders;
 };
 
 struct News {
-    int month = 0;
-    int day = 0;
-    int newsId = 0;
-    std::string content;
-    int publishTick = 0;
+  int month = 0;
+  int day = 0;
+  int newsId = 0;
+  std::string content;
+  int publishTick = 0;
 };
 
 struct ReportResult {
-    int newsId = 0;
-    int submissionRank = 0;
-    int submitTick = 0;
-    int settlementTick = 0;
-    std::string prediction;
-    bool isCorrect = false;
-    long reward = 0;
-    long actualChange = 0;
+  int newsId = 0;
+  int submissionRank = 0;
+  int submitTick = 0;
+  int settlementTick = 0;
+  std::string prediction;
+  bool isCorrect = false;
+  std::int64_t reward = 0;
+  std::int64_t actualChange = 0;
 };
 
 struct StrategyOptions {
-    std::optional<CardOption> infrastructure;
-    std::optional<CardOption> riskControl;
-    std::optional<CardOption> finTech;
+  std::optional<CardOption> infrastructure;
+  std::optional<CardOption> riskControl;
+  std::optional<CardOption> finTech;
 };
 
 struct TradeNotification {
-    long tradeId = 0;
-    long orderId = 0;
-    long price = 0;
-    int quantity = 0;
-    std::string side;
-    long fee = 0;
+  std::int64_t tradeId = 0;
+  std::int64_t orderId = 0;
+  std::int64_t price = 0;
+  int quantity = 0;
+  std::string side;
+  std::int64_t fee = 0;
 };
 
 struct SkillEffect {
-    std::string skillName;
-    std::string sourcePlayer;
-    std::optional<std::string> targetPlayer;
-    std::string description;
+  std::string skillName;
+  std::string sourcePlayer;
+  std::optional<std::string> targetPlayer;
+  std::string description;
 };
 
 enum class Prediction { Long, Short, Hold };
 
-inline std::string predictionToString(Prediction p) {
-    switch (p) {
-        case Prediction::Long: return "Long";
-        case Prediction::Short: return "Short";
-        case Prediction::Hold: return "Hold";
-    }
-    return "Hold";
+inline auto predictionToString(Prediction prediction) -> std::string {
+  switch (prediction) {
+    case Prediction::Long:
+      return "Long";
+    case Prediction::Short:
+      return "Short";
+    case Prediction::Hold:
+      return "Hold";
+  }
+  return "Hold";
 }
 
-} // namespace thuai
+}  // namespace thuai
