@@ -172,11 +172,14 @@ public class Program
             CurrentDay = game.CurrentDayNumber,
             CurrentTick = game.CurrentTick,
             TotalTicks = 30,
-            Scores = game.Scoreboard.Select(kv => new PlayerScore
-            {
-                Token = kv.Key,
-                Score = kv.Value
-            }).ToList()
+            Scores = game.Players.Values
+                .OrderBy(player => player.PlayerId)
+                .Select(player => new PlayerScore
+                {
+                    PlayerId = player.PlayerId,
+                    Score = game.Scoreboard.GetValueOrDefault(player.Token)
+                })
+                .ToList()
         };
         agentServer.PublishToAll(gameState);
 
