@@ -17,10 +17,10 @@ export function debugQueryMessage() {
   return { messageType: "DEBUG_QUERY" };
 }
 
-export function debugGiveCardMessage(targetToken, cardName) {
+export function debugGiveCardMessage(targetPlayerId, cardName) {
   return {
     messageType: "DEBUG_GIVE_CARD",
-    targetToken,
+    targetPlayerId: Number(targetPlayerId),
     cardName,
   };
 }
@@ -85,14 +85,14 @@ export function selectStrategyMessage(token, cardName) {
   };
 }
 
-export function activateSkillMessage(token, skillName, direction) {
+export function activateSkillMessage(token, skillName, targetPlayerId) {
   const message = {
     messageType: "ACTIVATE_SKILL",
     token,
     skillName,
   };
-  if (direction) {
-    message.direction = direction;
+  if (targetPlayerId !== undefined && targetPlayerId !== null && targetPlayerId !== "") {
+    message.targetPlayerId = Number(targetPlayerId);
   }
   return message;
 }

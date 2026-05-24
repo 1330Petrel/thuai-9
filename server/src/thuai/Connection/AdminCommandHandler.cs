@@ -32,6 +32,7 @@ public static class AdminCommandHandler
     {
         var players = game.GetPlayersSnapshot().Select(p => new DebugPlayerSnapshot
         {
+            PlayerId = p.PlayerId,
             Token = p.Token,
             Mora = p.Mora,
             FrozenMora = p.FrozenMora,
@@ -55,8 +56,10 @@ public static class AdminCommandHandler
             CurrentMonth = game.CurrentMonthNumber,
             CurrentDay = game.CurrentDayNumber,
             CurrentTick = game.CurrentTick,
-            Scoreboard = game.GetScoreboardSnapshot(),
-            CumulativeNavs = game.GetCumulativeNavsSnapshot(),
+            Scoreboard = game.GetScoreboardSnapshot()
+                .ToDictionary(kvp => game.FindPlayer(kvp.Key)?.PlayerId ?? -1, kvp => kvp.Value),
+            CumulativeNavs = game.GetCumulativeNavsSnapshot()
+                .ToDictionary(kvp => game.FindPlayer(kvp.Key)?.PlayerId ?? -1, kvp => kvp.Value),
             Players = players,
             Draft = draft
         };
@@ -64,9 +67,9 @@ public static class AdminCommandHandler
 
     private static DebugAckMessage HandleGiveCard(Game game, DebugGiveCardMessage msg)
     {
-        var player = game.FindPlayer(msg.TargetToken);
+        var player = game.FindPlayerById(msg.TargetPlayerId);
         if (player == null)
-            return Ack(msg.MessageType, false, $"unknown token: {msg.TargetToken}");
+            return Ack(msg.MessageType, false, $"unknown playerId: {msg.TargetPlayerId}");
 
         IStrategyCard? card = msg.CardName switch
         {
@@ -120,9 +123,9 @@ public static class AdminCommandHandler
 
     private static DebugAckMessage HandleSetPlayer(Game game, DebugSetPlayerMessage msg)
     {
-        var player = game.FindPlayer(msg.TargetToken);
+        var player = game.FindPlayerById(msg.TargetPlayerId);
         if (player == null)
-            return Ack(msg.MessageType, false, $"unknown token: {msg.TargetToken}");
+            return Ack(msg.MessageType, false, $"unknown playerId: {msg.TargetPlayerId}");
 
         if (msg.Mora.HasValue)
             player.AddMora(msg.Mora.Value - player.Mora);

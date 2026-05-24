@@ -36,11 +36,11 @@ TEST_CASE("protocol builders serialize outbound actions") {
     CHECK(activate_skill["messageType"] == "ACTIVATE_SKILL");
     CHECK(activate_skill["token"] == "player-1");
     CHECK(activate_skill["skillName"] == "MarketRadar");
-    CHECK_FALSE(activate_skill.contains("targetToken"));
+    CHECK_FALSE(activate_skill.contains("targetPlayerId"));
     CHECK_FALSE(activate_skill.contains("variant"));
 
-    json targeted_skill = buildActivateSkillMessage("player-1", "Freeze", std::string("player-2"), std::string("intense"));
-    CHECK(targeted_skill["targetToken"] == "player-2");
+    json targeted_skill = buildActivateSkillMessage("player-1", "Freeze", 1, std::string("intense"));
+    CHECK(targeted_skill["targetPlayerId"] == 1);
     CHECK(targeted_skill["variant"] == "intense");
 
     json report = buildSubmitReportMessage("player-3", 8, Prediction::Short);
@@ -74,6 +74,7 @@ TEST_CASE("game state parser reads current protocol fields") {
 
 TEST_CASE("player state parser handles nested orders and active cards") {
     thuai::PlayerState state = parsePlayerState(json{
+        {"playerId", 0},
         {"mora", 1400},
         {"frozenMora", 120},
         {"gold", 9},
@@ -100,6 +101,7 @@ TEST_CASE("player state parser handles nested orders and active cards") {
         })},
     });
 
+    CHECK(state.playerId == 0);
     CHECK(state.mora == 1400);
     CHECK(state.monthlyTradeCount == 17);
     REQUIRE(state.activeCards.size() == 2);
@@ -162,12 +164,12 @@ TEST_CASE("strategy and skill parsers handle optional fields") {
 
     thuai::SkillEffect effect = parseSkillEffect(json{
         {"skillName", "Hedge"},
-        {"sourcePlayer", "alpha"},
+        {"sourcePlayerId", 0},
         {"description", "Protected against one loss"},
     });
     CHECK(effect.skillName == "Hedge");
-    CHECK(effect.sourcePlayer == "alpha");
-    CHECK_FALSE(effect.targetPlayer.has_value());
+    CHECK(effect.sourcePlayerId == 0);
+    CHECK_FALSE(effect.targetPlayerId.has_value());
     CHECK(effect.description == "Protected against one loss");
 }
 
@@ -175,11 +177,11 @@ TEST_CASE("day settlement parser preserves month summary fields") {
     thuai::DaySettlement settlement = parseDaySettlement(json{
         {"day", 30},
         {"month", 6},
-        {"winnerToken", "alpha"},
+        {"winnerPlayerId", 0},
         {"reason", "highest NAV"},
         {"players", json::array({
             json{
-                {"token", "alpha"},
+                {"playerId", 0},
                 {"nav", 2000000},
                 {"mora", 1001000},
                 {"gold", 999},
@@ -191,24 +193,24 @@ TEST_CASE("day settlement parser preserves month summary fields") {
             },
         })},
         {"cumulativeNavs", json{
-            {"alpha", 4000000},
+            {"0", 4000000},
         }},
-        {"finalBonusWinnerToken", "beta"},
+        {"finalBonusWinnerPlayerId", 1},
         {"finalBonusPoints", 2},
     });
 
     CHECK(settlement.day == 30);
     CHECK(settlement.month == 6);
-    CHECK(settlement.winnerToken == "alpha");
+    CHECK(settlement.winnerPlayerId == 0);
     CHECK(settlement.reason == "highest NAV");
     REQUIRE(settlement.players.size() == 1);
-    CHECK(settlement.players[0].token == "alpha");
+    CHECK(settlement.players[0].playerId == 0);
     CHECK(settlement.players[0].tradeCount == 2);
     REQUIRE(settlement.players[0].activeCards.size() == 1);
     CHECK(settlement.players[0].activeCards[0] == "内幕消息");
     REQUIRE(settlement.cumulativeNavs.size() == 1);
-    CHECK(settlement.cumulativeNavs["alpha"] == 4000000);
-    CHECK(settlement.finalBonusWinnerToken == "beta");
+    CHECK(settlement.cumulativeNavs[0] == 4000000);
+    CHECK(settlement.finalBonusWinnerPlayerId == 1);
     CHECK(settlement.finalBonusPoints == 2);
 }
 // NOLINTEND

@@ -394,7 +394,7 @@ function handleSkill(event) {
   sendAction(activateSkillMessage(
     state.connection.token,
     String(data.get("skillName") || "").trim(),
-    data.get("direction"),
+    data.get("targetPlayerId"),
   ));
 }
 
@@ -427,7 +427,7 @@ function handleDebugGiveCard(event) {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
   sendAction(debugGiveCardMessage(
-    String(data.get("targetToken") || "").trim(),
+    String(data.get("targetPlayerId") || "").trim(),
     String(data.get("cardName") || "").trim(),
   ));
 }
@@ -445,7 +445,7 @@ function handleDebugSetPlayer(event) {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
   sendAction(debugSetPlayerMessage(
-    String(data.get("targetToken") || "").trim(),
+    String(data.get("targetPlayerId") || "").trim(),
     {
       mora: data.get("mora"),
       gold: data.get("gold"),
