@@ -105,14 +105,12 @@ public class Program
                 if (e.Game.Stage == GameStage.Settlement)
                 {
                     recorder.SaveResults(e.Game.GetScoreboardSnapshot());
-                    statRecorder.Save();
                 }
 
                 var sessions = sessionTracker.GetSnapshots(e.Game.CurrentTick);
                 if (statisticsWriter.MaybeSave(e.Game, sessions))
                 {
                     recorder.SaveResults(e.Game.GetScoreboardSnapshot());
-                    statRecorder.Save();
                 }
             };
 

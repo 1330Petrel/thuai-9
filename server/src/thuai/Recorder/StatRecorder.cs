@@ -10,12 +10,11 @@ public class StatRecorder : IDisposable
 {
     private readonly bool _enabled;
     private readonly RecordPage _recordPage = new();
-    private int _pageNumber;
     private readonly string _recordsDir;
     private readonly string _targetFilePath;
-    private readonly int _flushEveryRecords;
     private bool _disposed;
 
+    private int? _currentMonth;
     private GameStage? _previousStage;
     private string[]? _lastDraftOfferings;
     private Dictionary<string, HashSet<string>> _preDraftCardNames = new();
@@ -31,7 +30,6 @@ public class StatRecorder : IDisposable
     {
         _recordsDir = recordsDir;
         _enabled = enabled;
-        _flushEveryRecords = Math.Max(1, flushEveryRecords);
         _targetFilePath = Path.Combine(recordsDir, "stat.dat");
 
         Directory.CreateDirectory(recordsDir);
@@ -46,11 +44,6 @@ public class StatRecorder : IDisposable
 
         string json = JsonSerializer.Serialize(statEvent, JsonOptions);
         _recordPage.Enqueue(json);
-
-        if (_recordPage.Length >= _flushEveryRecords)
-        {
-            Save();
-        }
     }
 
     public void RecordFromGame(Game game)
@@ -58,6 +51,14 @@ public class StatRecorder : IDisposable
         if (!_enabled) return;
 
         var currentStage = game.Stage;
+        var currentMonth = game.CurrentMonthNumber;
+
+        // Month change: flush previous month's events as a single page
+        if (_currentMonth.HasValue && currentMonth != _currentMonth.Value)
+        {
+            FlushMonth(_currentMonth.Value);
+        }
+        _currentMonth = currentMonth;
 
         // Entering StrategySelection: capture draft offerings and pre-draft card snapshots
         if (currentStage == GameStage.StrategySelection && _previousStage != GameStage.StrategySelection)
@@ -156,16 +157,30 @@ public class StatRecorder : IDisposable
 
     public void Save()
     {
-        if (!_enabled || _recordPage.Length == 0) return;
+        // StatRecorder flushes at month boundaries; periodic saves are not needed.
+    }
+
+    public void Flush()
+    {
+        if (!_enabled) return;
+        if (_recordPage.Length > 0 && _currentMonth.HasValue)
+            FlushMonth(_currentMonth.Value);
+    }
+
+    private void FlushMonth(int month)
+    {
+        if (_recordPage.Length == 0) return;
 
         try
         {
-            _pageNumber++;
-            string pageName = $"{_pageNumber}.json";
+            string pageName = $"{month}.json";
             string content = _recordPage.ToJson();
 
             using var zipFile = new FileStream(_targetFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite);
             using var archive = new ZipArchive(zipFile, ZipArchiveMode.Update);
+
+            var existing = archive.GetEntry(pageName);
+            existing?.Delete();
 
             var entry = archive.CreateEntry(pageName, CompressionLevel.SmallestSize);
             using var writer = new StreamWriter(entry.Open());
@@ -175,15 +190,8 @@ public class StatRecorder : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to save stat recording");
+            Log.Error(ex, "Failed to save stat recording for month {Month}", month);
         }
-    }
-
-    public void Flush()
-    {
-        if (!_enabled) return;
-        if (_recordPage.Length > 0)
-            Save();
     }
 
     public void Dispose()

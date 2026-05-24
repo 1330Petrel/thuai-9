@@ -44,6 +44,6 @@
     "flushEveryRecords": 1000,
     "statisticsSaveIntervalTicks": 100,
     "enableStatRecording": true,
-    "statFlushEveryRecords": 50
+    "statFlushEveryRecords": 500
   }
 }
