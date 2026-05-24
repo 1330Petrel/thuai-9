@@ -61,12 +61,11 @@ class Agent {
     send(protocol::buildSelectStrategyMessage(token_, cardName));
   }
 
-  void activateSkill(const std::string& skillName,
-                     int targetPlayerId = -1,
+  void activateSkill(const std::string& skillName, int targetPlayerId = -1,
                      const std::string& variant = "") {
-    spdlog::debug("Queueing skill activation name={} targetPlayerId={} variant={}",
-                  skillName, targetPlayerId,
-                  variant.empty() ? "none" : variant);
+    spdlog::debug(
+        "Queueing skill activation name={} targetPlayerId={} variant={}",
+        skillName, targetPlayerId, variant.empty() ? "none" : variant);
     send(protocol::buildActivateSkillMessage(
         token_, skillName,
         targetPlayerId >= 0 ? std::make_optional(targetPlayerId) : std::nullopt,
@@ -226,17 +225,22 @@ class Agent {
       } else if (msgType == "SKILL_EFFECT") {
         const auto effect = protocol::parseSkillEffect(data);
         spdlog::debug(
-            "Parsed skill effect skill={} sourcePlayerId={} targetPlayerId={} description={}",
+            "Parsed skill effect skill={} sourcePlayerId={} targetPlayerId={} "
+            "description={}",
             effect.skillName, effect.sourcePlayerId,
-            effect.targetPlayerId.has_value() ? std::to_string(*effect.targetPlayerId) : "none",
+            effect.targetPlayerId.has_value()
+                ? std::to_string(*effect.targetPlayerId)
+                : "none",
             effect.description);
         onSkillEffect(effect);
       } else if (msgType == "DAY_SETTLEMENT") {
         latestDaySettlement = protocol::parseDaySettlement(data);
         spdlog::debug(
-            "Parsed day settlement month={} day={} winnerPlayerId={} players={}",
+            "Parsed day settlement month={} day={} winnerPlayerId={} "
+            "players={}",
             latestDaySettlement->month, latestDaySettlement->day,
-            latestDaySettlement->winnerPlayerId, latestDaySettlement->players.size());
+            latestDaySettlement->winnerPlayerId,
+            latestDaySettlement->players.size());
         onDaySettlement(*latestDaySettlement);
       } else if (msgType == "ERROR") {
         const int code = data.value("errorCode", 0);

@@ -235,7 +235,8 @@ inline auto parseDaySettlement(const json& data) -> DaySettlement {
   settlement.month = data.value("month", 0);
   settlement.winnerPlayerId = data.value("winnerPlayerId", -1);
   settlement.reason = data.value("reason", "");
-  settlement.finalBonusWinnerPlayerId = data.value("finalBonusWinnerPlayerId", -1);
+  settlement.finalBonusWinnerPlayerId =
+      data.value("finalBonusWinnerPlayerId", -1);
   settlement.finalBonusPoints = data.value("finalBonusPoints", 0);
 
   if (data.contains("players") && data["players"].is_array()) {
@@ -249,8 +250,8 @@ inline auto parseDaySettlement(const json& data) -> DaySettlement {
       player.frozenGold = playerEntry.value("frozenGold", 0);
       player.lockedGold = playerEntry.value("lockedGold", 0);
       player.tradeCount = playerEntry.value("tradeCount", 0);
-      if (playerEntry.contains("activeCards")
-          && playerEntry["activeCards"].is_array()) {
+      if (playerEntry.contains("activeCards") &&
+          playerEntry["activeCards"].is_array()) {
         for (const auto& cardValue : playerEntry["activeCards"]) {
           if (cardValue.is_string()) {
             player.activeCards.push_back(cardValue.get<std::string>());
