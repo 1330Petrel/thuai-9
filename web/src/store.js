@@ -255,7 +255,7 @@ export function applyMessage(state, message) {
       pushEvent(state, {
         kind: "settlement",
         title: `第 ${message.day ?? state.game.currentDay} 日结算`,
-        detail: `winner=${playerDisplayName(state, message.winnerPlayerId)} reason=${message.reason || "-"}`,
+        detail: `winner=${message.winnerPlayerId >= 0 ? playerDisplayName(state, message.winnerPlayerId) : "Tie"} reason=${message.reason || "-"}`,
       });
       break;
 

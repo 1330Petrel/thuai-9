@@ -509,7 +509,7 @@ function renderSettlement(state) {
   body.innerHTML = `
     <div class="settlement-row">
       <span>胜者</span>
-      <strong>${escapeHtml(playerDisplayName(state, state.settlement.winnerPlayerId))}</strong>
+      <strong>${escapeHtml(state.settlement.winnerPlayerId >= 0 ? playerDisplayName(state, state.settlement.winnerPlayerId) : "Tie")}</strong>
       <span>${escapeHtml(state.settlement.reason || "-")}</span>
     </div>
     ${rows

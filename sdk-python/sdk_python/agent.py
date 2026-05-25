@@ -55,7 +55,7 @@ class Agent:  # pylint: disable=too-many-instance-attributes
         self.strategy_options: Optional[StrategyOptions] = None
 
     async def connect(self) -> None:
-        """Open the websocket connection, send HELLO and wait for PlayerState."""
+        """Open the websocket connection and send HELLO."""
 
         self._ws = await connect(self.server_url)
         logger.info("Connected to %s", self.server_url)

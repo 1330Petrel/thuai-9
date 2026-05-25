@@ -19,6 +19,12 @@ pip install websockets
 ### Run the example agent
 
 ```bash
+python main.py --token player1 --server ws://localhost:14514
+```
+
+You can still use environment variables if you prefer:
+
+```bash
 TOKEN=player1 SERVER=ws://localhost:14514 python main.py
 ```
 

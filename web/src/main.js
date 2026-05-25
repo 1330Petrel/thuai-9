@@ -478,13 +478,13 @@ function showSummaryDetail(day) {
   body.innerHTML = `
     <section class="detail-section">
       <h3>结算结果</h3>
-      <p>胜者：${escapeHtml(summary.winnerToken || "Tie")}</p>
+      <p>胜者：${escapeHtml(summary.winnerPlayerId >= 0 ? playerDisplayName(state, summary.winnerPlayerId) : "Tie")}</p>
       <p>原因：${escapeHtml(summary.reason || "-")}</p>
     </section>
     <div class="detail-grid">
       ${(summary.players || []).map((player) => `
         <section class="detail-section">
-          <h3>${escapeHtml(player.token)}</h3>
+          <h3>${escapeHtml(playerDisplayName(state, player.playerId))}</h3>
           <p>NAV：${escapeHtml(player.nav)}</p>
           <p>Mora：${escapeHtml(player.mora)}</p>
           <p>Gold：${escapeHtml(player.gold)}</p>
@@ -561,7 +561,11 @@ function actionDetail(message) {
     return String(message.cardName || "");
   }
   if (message.messageType === "ACTIVATE_SKILL") {
-    return `${message.skillName || ""} ${message.direction || ""}`.trim();
+    const parts = [message.skillName || ""];
+    if (message.targetPlayerId !== undefined && message.targetPlayerId !== null && message.targetPlayerId !== "") {
+      parts.push(`target=选手 ${message.targetPlayerId}`);
+    }
+    return parts.filter(Boolean).join(" ");
   }
   return message.messageType;
 }
