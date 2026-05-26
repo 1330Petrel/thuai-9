@@ -14,6 +14,7 @@ import {
   submitReportMessage,
 } from "./actions.js";
 import { buildSampleMessages } from "./sample-data.js";
+import { buildReplaySession } from "./replay.js";
 import {
   applyMessage,
   clearSettlement,
@@ -21,6 +22,7 @@ import {
   markNewsAsRead,
   playerDisplayName,
   pushEvent,
+  resetRuntimeState,
   resetUiCollections,
   routeFromLocation,
   setActiveView,
@@ -28,6 +30,7 @@ import {
   setColorScheme,
   setConnectionPatch,
   setMode,
+  setReplayPatch,
 } from "./store.js";
 import { buildServerUrl, normalizeLocalhostPort, openWebSocket } from "./connection.js";
 import {
@@ -47,6 +50,9 @@ let ws = null;
 let reconnectTimer = null;
 let manuallyClosed = false;
 let marketCanvasHandlersBound = false;
+let replaySession = null;
+let replayTimer = null;
+let appliedReplayIndex = -1;
 
 initParticles();
 bindControls();
@@ -98,6 +104,12 @@ function bindControls() {
     const playerButton = event.target.closest("[data-player-id]");
     if (playerButton) {
       showPlayerDetail(Number(playerButton.dataset.playerId));
+      return;
+    }
+
+    const playerKeyButton = event.target.closest("[data-player-key]");
+    if (playerKeyButton) {
+      showPlayerDetail(playerKeyButton.dataset.playerKey);
     }
   });
 
@@ -136,6 +148,20 @@ function bindControls() {
   document.getElementById("connectButton")?.addEventListener("click", connect);
   document.getElementById("disconnectButton")?.addEventListener("click", () => disconnect(true));
   document.getElementById("demoButton")?.addEventListener("click", loadDemo);
+  document.getElementById("replayLoadButton")?.addEventListener("click", handleReplayLoad);
+  document.getElementById("replayPlayButton")?.addEventListener("click", toggleReplayPlayback);
+  document.getElementById("replayPrevButton")?.addEventListener("click", () => seekReplayFrame(state.replay.frameIndex - 1));
+  document.getElementById("replayNextButton")?.addEventListener("click", () => seekReplayFrame(state.replay.frameIndex + 1));
+  document.getElementById("replaySlider")?.addEventListener("input", (event) => {
+    seekReplayFrame(Number(event.target.value));
+  });
+  document.getElementById("replaySpeedSelect")?.addEventListener("change", (event) => {
+    setReplayPatch(state, { speed: Number(event.target.value) || 1 });
+    if (state.replay.playing) {
+      startReplayTimer();
+    }
+    renderApp(state);
+  });
 
   document.getElementById("priceModeSelect")?.addEventListener("change", (event) => {
     setCandleOptions(state, { priceField: event.target.value });
@@ -226,6 +252,20 @@ function currentServerMode() {
 }
 
 function connect() {
+  stopReplayPlayback();
+  replaySession = null;
+  appliedReplayIndex = -1;
+  setReplayPatch(state, {
+    enabled: false,
+    loaded: false,
+    playing: false,
+    frameIndex: 0,
+    frameCount: 0,
+    label: "",
+    error: "",
+    hasStats: false,
+    statEventCount: 0,
+  });
   clearTimeout(reconnectTimer);
   manuallyClosed = false;
 
@@ -291,6 +331,10 @@ function connect() {
   });
 
   ws.addEventListener("close", () => {
+    if (state.replay.enabled) {
+      renderApp(state);
+      return;
+    }
     const nextStatus = manuallyClosed ? "disconnected" : "error";
     setConnectionPatch(state, { status: nextStatus });
     renderApp(state);
@@ -299,6 +343,7 @@ function connect() {
 }
 
 function disconnect(byUser) {
+  stopReplayPlayback();
   manuallyClosed = byUser;
   clearTimeout(reconnectTimer);
   if (ws && ws.readyState <= 1) {
@@ -333,7 +378,7 @@ function sendAction(message, options = {}) {
     sendJson(ws, message);
     setConnectionPatch(state, { lastSent: message.messageType });
     if (!options.silent) {
-      pushEvent(state, {
+      pushEvent(state, localActionEvent(message) || {
         kind: "system",
         title: `已发送 ${message.messageType}`,
         detail: actionDetail(message),
@@ -455,7 +500,21 @@ function handleDebugSetPlayer(event) {
 }
 
 function loadDemo() {
-  disconnect(false);
+  stopReplayPlayback();
+  replaySession = null;
+  appliedReplayIndex = -1;
+  setReplayPatch(state, {
+    enabled: false,
+    loaded: false,
+    playing: false,
+    frameIndex: 0,
+    frameCount: 0,
+    label: "",
+    error: "",
+    hasStats: false,
+    statEventCount: 0,
+  });
+  disconnect(true);
   resetUiCollections(state);
   clearSettlement(state);
   resetMarketChartViewport();
@@ -463,6 +522,139 @@ function loadDemo() {
     applyMessage(state, message);
   }
   renderApp(state);
+}
+
+async function handleReplayLoad() {
+  const replayFile = document.getElementById("replayFileInput")?.files?.[0];
+  const statFile = document.getElementById("statFileInput")?.files?.[0] || null;
+  if (!replayFile) {
+    setReplayPatch(state, { error: "请选择 replay.dat" });
+    renderApp(state);
+    return;
+  }
+
+  stopReplayPlayback();
+  disconnect(true);
+  setReplayPatch(state, {
+    enabled: true,
+    loaded: false,
+    playing: false,
+    frameIndex: 0,
+    frameCount: 0,
+    label: replayFile.name,
+    error: "",
+    hasStats: Boolean(statFile),
+    statEventCount: 0,
+  });
+  setConnectionPatch(state, { status: "replay", lastError: "" });
+  renderApp(state);
+
+  try {
+    replaySession = await buildReplaySession(replayFile, statFile);
+    appliedReplayIndex = -1;
+    resetRuntimeState(state, { preserveReplay: true });
+    setReplayPatch(state, {
+      enabled: true,
+      loaded: true,
+      playing: false,
+      frameIndex: 0,
+      frameCount: replaySession.frameCount,
+      label: `${replaySession.label}${replaySession.hasStats ? " + stat" : ""}`,
+      error: "",
+      hasStats: replaySession.hasStats,
+      statEventCount: replaySession.statEventCount,
+    });
+    setConnectionPatch(state, { status: "replay", lastError: "" });
+    setActiveView(state, "logs");
+    resetMarketChartViewport();
+    seekReplayFrame(0);
+  } catch (error) {
+    replaySession = null;
+    appliedReplayIndex = -1;
+    setReplayPatch(state, {
+      enabled: false,
+      loaded: false,
+      playing: false,
+      error: error.message || "回放加载失败",
+    });
+    setConnectionPatch(state, { status: "error", lastError: error.message || "回放加载失败" });
+    renderApp(state);
+  }
+}
+
+function toggleReplayPlayback() {
+  if (!replaySession || !state.replay.loaded) return;
+  if (state.replay.playing) {
+    stopReplayPlayback();
+  } else {
+    if (state.replay.frameIndex >= state.replay.frameCount - 1) {
+      seekReplayFrame(0);
+    }
+    setReplayPatch(state, { playing: true, enabled: true });
+    startReplayTimer();
+  }
+  renderApp(state);
+}
+
+function startReplayTimer() {
+  window.clearInterval(replayTimer);
+  const speed = Math.max(0.25, Number(state.replay.speed) || 1);
+  const intervalMs = Math.max(60, Math.round(700 / speed));
+  replayTimer = window.setInterval(() => {
+    if (!replaySession || state.replay.frameIndex >= state.replay.frameCount - 1) {
+      stopReplayPlayback();
+      renderApp(state);
+      return;
+    }
+    seekReplayFrame(state.replay.frameIndex + 1);
+  }, intervalMs);
+}
+
+function stopReplayPlayback() {
+  window.clearInterval(replayTimer);
+  replayTimer = null;
+  if (state.replay.playing) {
+    setReplayPatch(state, { playing: false });
+  }
+}
+
+function seekReplayFrame(rawIndex) {
+  if (!replaySession || !state.replay.loaded) return;
+  const maxFrame = Math.max(0, replaySession.frameCount - 1);
+  const targetIndex = Math.min(maxFrame, Math.max(0, Number(rawIndex) || 0));
+  if (targetIndex <= appliedReplayIndex || appliedReplayIndex < 0) {
+    rebuildReplayTo(targetIndex);
+  } else {
+    for (let index = appliedReplayIndex + 1; index <= targetIndex; index += 1) {
+      applyReplayFrame(index);
+    }
+  }
+  appliedReplayIndex = targetIndex;
+  setReplayPatch(state, {
+    enabled: true,
+    loaded: true,
+    frameIndex: targetIndex,
+    frameCount: replaySession.frameCount,
+  });
+  setConnectionPatch(state, { status: "replay" });
+  renderApp(state);
+}
+
+function rebuildReplayTo(targetIndex) {
+  resetRuntimeState(state, { preserveReplay: true });
+  setConnectionPatch(state, { status: "replay" });
+  resetMarketChartViewport();
+  for (let index = 0; index <= targetIndex; index += 1) {
+    applyReplayFrame(index);
+  }
+}
+
+function applyReplayFrame(index) {
+  const frame = replaySession?.frames[index];
+  if (!frame) return;
+  for (const message of frame.messages) {
+    applyMessage(state, message);
+  }
 }
 
 function showSummaryDetail(day) {
@@ -484,7 +676,7 @@ function showSummaryDetail(day) {
     <div class="detail-grid">
       ${(summary.players || []).map((player) => `
         <section class="detail-section">
-          <h3>${escapeHtml(playerDisplayName(state, player.playerId))}</h3>
+          <h3>${escapeHtml(playerDisplayName(state, player.playerId, player.token))}</h3>
           <p>NAV：${escapeHtml(player.nav)}</p>
           <p>Mora：${escapeHtml(player.mora)}</p>
           <p>Gold：${escapeHtml(player.gold)}</p>
@@ -499,8 +691,9 @@ function showSummaryDetail(day) {
   openModal("detailModal");
 }
 
-function showPlayerDetail(playerId) {
-  const player = state.playerSummaries[playerId];
+function showPlayerDetail(playerKey) {
+  const key = String(playerKey);
+  const player = state.playerSummaries[key];
   if (!player) return;
   const body = document.getElementById("detailModalBody");
   const title = document.getElementById("detailModalTitle");
@@ -508,7 +701,7 @@ function showPlayerDetail(playerId) {
   if (!body || !title || !eyebrow) return;
 
   eyebrow.textContent = "操盘手";
-  title.textContent = `${playerDisplayName(state, playerId)} 摘要`;
+  title.textContent = `${playerDisplayName(state, player.playerId, player.token)} 摘要`;
   body.innerHTML = `
     <section class="detail-section">
       <h3>当前状态</h3>
@@ -568,6 +761,61 @@ function actionDetail(message) {
     return parts.filter(Boolean).join(" ");
   }
   return message.messageType;
+}
+
+function localActionEvent(message) {
+  const token = state.connection.role === "player" ? state.connection.token : "";
+  if (message.messageType === "LIMIT_BUY" || message.messageType === "LIMIT_SELL") {
+    const side = message.messageType === "LIMIT_SELL" ? "Sell" : "Buy";
+    return {
+      kind: "order",
+      title: `${side === "Sell" ? "卖出" : "买入"}挂单`,
+      detail: `price=${message.price} qty=${message.quantity}`,
+      playerToken: token,
+      side,
+      price: Number(message.price) || 0,
+      quantity: Number(message.quantity) || 0,
+      isPrivate: true,
+    };
+  }
+  if (message.messageType === "CANCEL_ORDER") {
+    return {
+      kind: "order",
+      title: "撤单",
+      detail: `order=${message.orderId}`,
+      playerToken: token,
+      isPrivate: true,
+    };
+  }
+  if (message.messageType === "SUBMIT_REPORT") {
+    return {
+      kind: "report",
+      title: "提交研报",
+      detail: `news=${message.newsId} prediction=${message.prediction}`,
+      playerToken: token,
+      isPrivate: true,
+    };
+  }
+  if (message.messageType === "ACTIVATE_SKILL") {
+    return {
+      kind: "skill",
+      title: message.skillName || "激活技能",
+      detail: actionDetail(message),
+      playerToken: token,
+      targetPlayerId: Number(message.targetPlayerId),
+      isPrivate: true,
+    };
+  }
+  if (message.messageType === "SELECT_STRATEGY") {
+    return {
+      kind: "strategy",
+      title: "选择策略",
+      detail: String(message.cardName || ""),
+      playerToken: token,
+      isPrivate: true,
+    };
+  }
+  return null;
 }
 
 function escapeHtml(value) {

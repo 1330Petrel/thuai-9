@@ -164,6 +164,9 @@ public record ReportResultMessage : Message
 {
     public override string MessageType => "REPORT_RESULT";
 
+    [JsonPropertyName("playerId")]
+    public int PlayerId { get; init; }
+
     [JsonPropertyName("newsId")]
     public int NewsId { get; init; }
 
@@ -219,6 +222,9 @@ public record TradeNotificationMessage : Message
 {
     public override string MessageType => "TRADE_NOTIFICATION";
 
+    [JsonPropertyName("playerId")]
+    public int PlayerId { get; init; }
+
     [JsonPropertyName("tradeId")]
     public long TradeId { get; init; }
 
@@ -236,6 +242,9 @@ public record TradeNotificationMessage : Message
 
     [JsonPropertyName("fee")]
     public long Fee { get; init; }
+
+    [JsonPropertyName("tick")]
+    public int Tick { get; init; }
 }
 
 public record SkillEffectMessage : Message

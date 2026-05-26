@@ -29,8 +29,8 @@
 | `PLAYER_STATE` | 已发送 | 私发对应 player，包含 `playerId` |
 | `STRATEGY_OPTIONS` | 已发送 | `StrategySelection` 阶段广播 |
 | `NEWS_BROADCAST` | 已发送 | 公共新闻、伪造新闻、内幕预览共用同一 schema |
-| `REPORT_RESULT` | 已发送 | 仅发送给提交该研报的 player |
-| `TRADE_NOTIFICATION` | 已发送 | 成交时分别发送给买方和卖方 |
+| `REPORT_RESULT` | 已发送 | 发送给提交该研报的 player；admin 可见 |
+| `TRADE_NOTIFICATION` | 已发送 | 成交时分别发送给买方和卖方；admin 可见 |
 | `SKILL_EFFECT` | 已发送 | 技能触发后广播给所有 player |
 | `DAY_SETTLEMENT` | 已发送 | 月结算广播 |
 | `ERROR` | 已发送 | 校验错误等 |
@@ -346,11 +346,12 @@
 
 ### REPORT_RESULT
 
-研报结算结果，仅发送给提交该研报的 player。
+研报结算结果，实时发送给提交该研报的 player；admin 可见。Observer 不接收该私有结果，replay 可从记录中完整展示。
 
 ```json
 {
   "messageType": "REPORT_RESULT",
+  "playerId": 0,
   "newsId": 5,
   "submissionRank": 1,
   "submitTick": 11,
@@ -366,6 +367,7 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
+| `playerId` | int | 提交研报的 PlayerID |
 | `newsId` | number | 对应新闻 ID |
 | `submissionRank` | number | 该新闻下的提交先后排名 |
 | `submitTick` | number | 提交日 |
@@ -382,14 +384,29 @@
 ```json
 {
   "messageType": "TRADE_NOTIFICATION",
+  "playerId": 0,
   "tradeId": 1001,
   "orderId": 123,
   "price": 2000,
   "quantity": 5,
   "side": "Buy",
-  "fee": 2
+  "fee": 2,
+  "tick": 12
 }
 ```
+
+字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `playerId` | int | 接收该私有成交视角的 PlayerID |
+| `tradeId` | number | 成交 ID |
+| `orderId` | number | 接收者侧订单 ID |
+| `price` | number | 成交价 |
+| `quantity` | number | 成交数量 |
+| `side` | string | 接收者视角，`Buy` / `Sell` |
+| `fee` | number | 接收者承担的手续费 |
+| `tick` | number | 成交发生的月内 Tick |
 
 ### SKILL_EFFECT
 
@@ -497,3 +514,15 @@ Waiting -> PreparingGame -> StrategySelection -> TradingDay -> Settlement
 - `TradingDay` / `Settlement` 阶段的每个 tick：发送 `MARKET_STATE` 和 `PLAYER_STATE`。
 - `StrategySelection` 阶段的每个 tick：发送 `STRATEGY_OPTIONS`。
 - 新闻、技能、成交、研报结算等事件，会在下一次广播周期里附带发送。
+
+## Replay 记录
+
+服务端启用 recorder 后会生成 `data/replay.dat`。该文件是 ZIP，内部按 `1.json`、`2.json` 分页保存 snapshot 数组。新版 snapshot 包含：
+
+- `tick`、`stage`、`month`、`day`、`tradingDayTick`。
+- `scores`：token 到分数的历史字典，或新版 PlayerID 分数列表。
+- `marketState`：`bids`、`asks`、`lastPrice`、`midPrice`、`volume`。
+- `players[]`：`playerId`、`token`、资产、`monthlyTradeCount`、`activeCards`、完整 `pendingOrders`、`nav`。
+- `events[]`：用于回放的公开与私有行为事件，包括 `news`、`report`、`trade`、`skill`，以及结算消息。
+
+实时 observer 不应消费私有字段；`replay.dat` 面向赛后复盘，前端回放模式会完整展示玩家 token、挂单、成交、技能和研报结果。

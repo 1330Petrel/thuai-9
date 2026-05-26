@@ -162,6 +162,11 @@ button:disabled {
   color: var(--green);
 }
 
+.status-metric[data-status="replay"] {
+  border-color: rgba(200, 168, 75, 0.42);
+  color: var(--gold);
+}
+
 .status-metric[data-status="error"],
 .status-metric[data-status="disconnected"] {
   border-color: rgba(196, 69, 54, 0.35);
@@ -625,9 +630,19 @@ button:focus-visible {
   border-left-color: var(--green);
 }
 
+.event-item[data-kind="order"] {
+  border-left-color: var(--teal);
+}
+
+.event-item[data-kind="report"],
 .event-item[data-kind="settlement"],
 .event-item[data-kind="news"] {
   border-left-color: var(--gold);
+}
+
+.event-item[data-kind="skill"],
+.event-item[data-kind="strategy"] {
+  border-left-color: #d29922;
 }
 
 .event-item strong {
@@ -1058,7 +1073,7 @@ body {
 
 .sidebar {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   gap: 14px;
   min-width: 0;
   min-height: 0;
@@ -1149,6 +1164,11 @@ body {
   color: var(--green);
 }
 
+.status-metric[data-status="replay"] {
+  border-color: rgba(200, 168, 75, 0.42);
+  color: var(--gold);
+}
+
 .status-metric[data-status="error"],
 .status-metric[data-status="disconnected"] {
   border-color: rgba(248, 81, 73, 0.35);
@@ -1165,6 +1185,73 @@ body {
   border: 1px solid var(--line);
   padding: 12px;
   box-shadow: none;
+}
+
+.replay-controls {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--surface-2);
+}
+
+.replay-head,
+.replay-tail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.replay-head span,
+.replay-tail span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replay-head strong {
+  color: var(--gold);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-controls input[type="file"] {
+  min-height: 34px;
+  padding: 6px;
+  font-size: 12px;
+}
+
+.replay-button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 36px 36px;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  place-items: center;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.replay-slider {
+  width: 100%;
+  accent-color: var(--gold);
+}
+
+.replay-tail select {
+  min-width: 82px;
+}
+
+#replayStatus[data-status="error"] {
+  color: var(--red);
 }
 
 .menu-panel {
@@ -1325,6 +1412,26 @@ body[data-mode="admin"] .menu-button.admin-menu-item {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.logs-view-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.action-focus-panel {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.event-stream-panel {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.daily-summary-panel {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
 .panel {
   display: flex;
   flex-direction: column;
@@ -1410,6 +1517,104 @@ body[data-mode="admin"] .menu-button.admin-menu-item {
 .news-feed,
 .event-feed {
   flex: 1;
+}
+
+.action-focus-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.action-count-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.action-count,
+.action-latest {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.action-count {
+  padding: 8px;
+}
+
+.action-count span,
+.action-latest span,
+.action-latest small,
+.event-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-count strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.action-latest-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.action-latest {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-left: 3px solid var(--teal);
+}
+
+.action-latest[data-kind="trade"] {
+  border-left-color: var(--green);
+}
+
+.action-latest[data-kind="report"],
+.action-latest[data-kind="skill"] {
+  border-left-color: var(--gold);
+}
+
+.action-latest strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-head {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: start;
+}
+
+.event-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--gold);
+  background: rgba(200, 168, 75, 0.08);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 5px;
+}
+
+.event-player {
+  color: var(--text);
 }
 
 .scoreboard,

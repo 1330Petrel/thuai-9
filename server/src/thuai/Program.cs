@@ -99,8 +99,8 @@ public class Program
             {
                 ExpireDisconnectedPlayers(e.Game, sessionTracker);
                 statRecorder.RecordFromGame(e.Game);
-                BroadcastGameState(agentServer, e.Game);
                 RecordGameState(recorder, e.Game);
+                BroadcastGameState(agentServer, e.Game);
 
                 if (e.Game.Stage == GameStage.Settlement)
                 {
@@ -385,8 +385,10 @@ public class Program
 
         foreach (var report in tradingDay.SettledReportsThisDay)
         {
+            var playerId = game.FindPlayer(report.PlayerToken)?.PlayerId ?? -1;
             agentServer.Publish(new ReportResultMessage
             {
+                PlayerId = playerId,
                 NewsId = report.NewsId,
                 SubmissionRank = report.SubmissionRank,
                 SubmitTick = report.SubmitTick,
@@ -402,27 +404,33 @@ public class Program
         {
             if (trade.BuyerToken != "SYSTEM")
             {
+                var buyerId = game.FindPlayer(trade.BuyerToken)?.PlayerId ?? -1;
                 agentServer.Publish(new TradeNotificationMessage
                 {
+                    PlayerId = buyerId,
                     TradeId = trade.TradeId,
                     OrderId = trade.BuyOrderId,
                     Price = trade.Price,
                     Quantity = trade.Quantity,
                     Side = "Buy",
-                    Fee = trade.BuyerFee
+                    Fee = trade.BuyerFee,
+                    Tick = trade.Tick
                 }, trade.BuyerToken);
             }
 
             if (trade.SellerToken != "SYSTEM")
             {
+                var sellerId = game.FindPlayer(trade.SellerToken)?.PlayerId ?? -1;
                 agentServer.Publish(new TradeNotificationMessage
                 {
+                    PlayerId = sellerId,
                     TradeId = trade.TradeId,
                     OrderId = trade.SellOrderId,
                     Price = trade.Price,
                     Quantity = trade.Quantity,
                     Side = "Sell",
-                    Fee = trade.SellerFee
+                    Fee = trade.SellerFee,
+                    Tick = trade.Tick
                 }, trade.SellerToken);
             }
         }
@@ -486,6 +494,85 @@ public class Program
 
     private static void RecordGameState(Recorder.Recorder recorder, Game game)
     {
+        var replayEvents = new List<object>();
+        if (game.CurrentTradingDay != null)
+        {
+            var tradingDay = game.CurrentTradingDay;
+            foreach (var news in tradingDay.PublishedNewsThisDay)
+            {
+                replayEvents.Add(new
+                {
+                    Type = "news",
+                    Month = game.CurrentMonthNumber,
+                    NewsId = news.NewsId,
+                    PublishTick = news.PublishTick,
+                    Content = news.Content,
+                    Sentiment = news.Sentiment.ToString(),
+                    IsFake = news.IsFake,
+                    SourcePlayer = news.SourcePlayer
+                });
+            }
+
+            foreach (var report in tradingDay.SettledReportsThisDay)
+            {
+                replayEvents.Add(new
+                {
+                    Type = "report",
+                    Month = game.CurrentMonthNumber,
+                    PlayerId = game.FindPlayer(report.PlayerToken)?.PlayerId ?? -1,
+                    PlayerToken = report.PlayerToken,
+                    NewsId = report.NewsId,
+                    Prediction = report.Prediction.ToString(),
+                    SubmitTick = report.SubmitTick,
+                    SettlementTick = report.SettlementDay,
+                    SubmissionRank = report.SubmissionRank,
+                    IsCorrect = report.IsCorrect ?? false,
+                    ActualChange = report.ActualChange,
+                    Reward = report.Reward
+                });
+            }
+
+            foreach (var trade in tradingDay.TradesThisDay)
+            {
+                replayEvents.Add(new
+                {
+                    Type = "trade",
+                    Month = game.CurrentMonthNumber,
+                    Tick = trade.Tick,
+                    TradeId = trade.TradeId,
+                    BuyOrderId = trade.BuyOrderId,
+                    SellOrderId = trade.SellOrderId,
+                    BuyerPlayerId = game.FindPlayer(trade.BuyerToken)?.PlayerId ?? -1,
+                    SellerPlayerId = game.FindPlayer(trade.SellerToken)?.PlayerId ?? -1,
+                    BuyerToken = trade.BuyerToken,
+                    SellerToken = trade.SellerToken,
+                    Price = trade.Price,
+                    Quantity = trade.Quantity,
+                    BuyerFee = trade.BuyerFee,
+                    SellerFee = trade.SellerFee
+                });
+            }
+
+            foreach (var skill in tradingDay.SkillEffectsThisDay)
+            {
+                replayEvents.Add(new
+                {
+                    Type = "skill",
+                    Month = game.CurrentMonthNumber,
+                    Tick = game.CurrentTick,
+                    SourcePlayerId = skill.SourcePlayerId,
+                    TargetPlayerId = skill.TargetPlayerId,
+                    SkillName = skill.SkillName,
+                    Description = skill.Description
+                });
+            }
+        }
+
+        if (game.HasPendingSettlementNotification && game.CurrentTradingDay != null)
+        {
+            replayEvents.Add(BuildDaySettlementMessage(game));
+        }
+
         var snapshot = new
         {
             Tick = game.CurrentTick,
@@ -502,16 +589,31 @@ public class Program
             } : null,
             Players = game.Players.Values.Select(p => new
             {
+                PlayerId = p.PlayerId,
                 Token = p.Token,
                 Mora = p.Mora,
                 Gold = p.Gold,
                 FrozenMora = p.FrozenMora,
                 FrozenGold = p.FrozenGold,
                 LockedGold = p.LockedGold,
+                MonthlyTradeCount = p.MonthlyTradeCount,
+                ActiveCards = p.ActiveCards.Select(card => card.Name).ToList(),
+                PendingOrders = game.CurrentTradingDay?.GetPlayerPendingOrders(p.Token).Select(o => new
+                {
+                    o.OrderId,
+                    ArrivalTick = o.ArrivalTick,
+                    Side = o.Side.ToString(),
+                    o.Price,
+                    o.Quantity,
+                    o.RemainingQuantity,
+                    Status = o.Status.ToString(),
+                    Intent = o.Intent?.ToString() ?? ""
+                }).ToList(),
                 Nav = game.CurrentTradingDay != null
                     ? p.CalculateNAV(game.CurrentTradingDay.OrderBook.MidPrice)
                     : p.Mora
-            }).ToList()
+            }).ToList(),
+            Events = replayEvents
         };
 
         recorder.Record(snapshot);

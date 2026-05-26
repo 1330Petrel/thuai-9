@@ -639,10 +639,11 @@ public class ProgramRuntimeCoverageTests
         Assert.Contains("REPORT_RESULT", alphaTypes);
         Assert.Equal(2, alphaMessages.OfType<NewsBroadcastMessage>().Count());
         Assert.Contains(alphaMessages.OfType<NewsBroadcastMessage>(), message => message.Content == "preview-news");
-        Assert.Contains(alphaMessages.OfType<TradeNotificationMessage>(), message => message.Side == "Buy");
+        Assert.Contains(alphaMessages.OfType<ReportResultMessage>(), message => message.PlayerId == 0);
+        Assert.Contains(alphaMessages.OfType<TradeNotificationMessage>(), message => message.Side == "Buy" && message.PlayerId == 0 && message.Tick == 3);
 
         var betaMessages = TestServerHelpers.GetQueuedMessages(server, "beta-player");
-        Assert.Contains(betaMessages.OfType<TradeNotificationMessage>(), message => message.Side == "Sell");
+        Assert.Contains(betaMessages.OfType<TradeNotificationMessage>(), message => message.Side == "Sell" && message.PlayerId == 1 && message.Tick == 3);
         Assert.Single(betaMessages.OfType<PlayerStateMessage>());
 
         var observerTypes = TestServerHelpers.GetQueuedMessageTypes(server, "observer");
@@ -670,6 +671,42 @@ public class ProgramRuntimeCoverageTests
         {
             var game = TestServerHelpers.CreateGameAtTradingDay();
             game.FindPlayer("alpha")!.AddMora(77);
+            var day = game.CurrentTradingDay!;
+            day.HandleLimitBuy("alpha", 999, 1);
+            TestServerHelpers.GetPrivateField<List<News>>(day, "_publishedNewsThisDay").Add(new News
+            {
+                NewsId = 1,
+                PublishTick = 1,
+                Content = "replay-news",
+                Sentiment = NewsSentiment.Bullish,
+                IsFake = false
+            });
+            TestServerHelpers.GetPrivateField<List<ResearchReport>>(day, "_settledReportsThisDay").Add(new ResearchReport
+            {
+                PlayerToken = "alpha",
+                NewsId = 1,
+                Prediction = Prediction.Long,
+                SubmissionRank = 1,
+                SubmitTick = 1,
+                SettlementDay = 2,
+                IsCorrect = true,
+                Reward = 55,
+                ActualChange = 3
+            });
+            TestServerHelpers.GetPrivateField<List<Trade>>(day, "_tradesThisDay").Add(new Trade
+            {
+                BuyOrderId = 10,
+                SellOrderId = 11,
+                BuyerToken = "alpha",
+                SellerToken = "beta",
+                Price = 1004,
+                Quantity = 2,
+                Tick = 2,
+                BuyerFee = 1,
+                SellerFee = 1
+            });
+            TestServerHelpers.GetPrivateField<List<SkillActivation>>(day, "_skillEffectsThisDay").Add(
+                new SkillActivation(0, "闪电交易", "bonus action"));
 
             using (var recorder = new RecorderService(dir))
             {
@@ -690,6 +727,21 @@ public class ProgramRuntimeCoverageTests
             Assert.Equal(game.CurrentTradingDay.OrderBook.LastPrice, snapshot.GetProperty("marketState").GetProperty("lastPrice").GetInt64());
             Assert.Contains(snapshot.GetProperty("players").EnumerateArray(),
                 player => player.GetProperty("token").GetString() == "alpha");
+            var alpha = snapshot.GetProperty("players").EnumerateArray()
+                .Single(player => player.GetProperty("token").GetString() == "alpha");
+            Assert.Equal(0, alpha.GetProperty("playerId").GetInt32());
+            Assert.True(alpha.TryGetProperty("activeCards", out _));
+            Assert.Contains(alpha.GetProperty("pendingOrders").EnumerateArray(),
+                order => order.GetProperty("orderId").GetInt64() > 0);
+
+            var replayEvents = snapshot.GetProperty("events").EnumerateArray().ToList();
+            Assert.Contains(replayEvents, item => item.GetProperty("type").GetString() == "news");
+            Assert.Contains(replayEvents, item => item.GetProperty("type").GetString() == "report"
+                && item.GetProperty("playerId").GetInt32() == 0);
+            Assert.Contains(replayEvents, item => item.GetProperty("type").GetString() == "trade"
+                && item.GetProperty("buyerPlayerId").GetInt32() == 0
+                && item.GetProperty("sellerPlayerId").GetInt32() == 1);
+            Assert.Contains(replayEvents, item => item.GetProperty("type").GetString() == "skill");
         }
         finally
         {

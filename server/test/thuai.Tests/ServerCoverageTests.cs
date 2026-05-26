@@ -206,15 +206,19 @@ public class ProtocolCoverageTests
 
         var trade = ParseJson(new TradeNotificationMessage
         {
+            PlayerId = 0,
             TradeId = 99,
             OrderId = 11,
             Price = 1001,
             Quantity = 5,
             Side = "Buy",
-            Fee = 2
+            Fee = 2,
+            Tick = 7
         });
         Assert.Equal("TRADE_NOTIFICATION", trade.GetProperty("messageType").GetString());
+        Assert.Equal(0, trade.GetProperty("playerId").GetInt32());
         Assert.Equal(2, trade.GetProperty("fee").GetInt64());
+        Assert.Equal(7, trade.GetProperty("tick").GetInt32());
 
         var options = ParseJson(new StrategyOptionsMessage
         {

@@ -102,6 +102,43 @@
           </div>
         </section>
 
+        <section class="replay-controls" aria-label="replay controls">
+          <div class="replay-head">
+            <span>回放</span>
+            <strong id="replayFrameLabel">未加载</strong>
+          </div>
+
+          <label class="field">
+            <span>replay.dat</span>
+            <input id="replayFileInput" type="file" accept=".dat,.zip,application/zip">
+          </label>
+
+          <label class="field">
+            <span>stat.dat</span>
+            <input id="statFileInput" type="file" accept=".dat,.zip,application/zip">
+          </label>
+
+          <div class="button-row replay-button-row">
+            <button id="replayLoadButton" class="primary-button" type="button">加载</button>
+            <button id="replayPlayButton" type="button" disabled>播放</button>
+            <button id="replayPrevButton" class="icon-button" type="button" aria-label="上一帧" disabled>‹</button>
+            <button id="replayNextButton" class="icon-button" type="button" aria-label="下一帧" disabled>›</button>
+          </div>
+
+          <input id="replaySlider" class="replay-slider" type="range" min="0" max="0" value="0" disabled>
+
+          <div class="replay-tail">
+            <select id="replaySpeedSelect" aria-label="回放速度">
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1x</option>
+              <option value="2">2x</option>
+              <option value="5">5x</option>
+              <option value="10">10x</option>
+            </select>
+            <span id="replayStatus">等待文件</span>
+          </div>
+        </section>
+
         <nav class="menu-panel" aria-label="主菜单">
           <button type="button" class="menu-button" data-view="main">交易大厅</button>
           <button type="button" class="menu-button" data-view="logs">市场动态</button>
@@ -189,7 +226,17 @@
 
           <section class="view-panel" data-view-panel="logs">
             <div class="view-grid logs-view-grid">
-              <section class="panel">
+              <section class="panel action-focus-panel">
+                <div class="panel-head compact">
+                  <div>
+                    <p class="eyebrow">行为</p>
+                    <h2>行为聚焦</h2>
+                  </div>
+                </div>
+                <div id="actionHighlights" class="action-focus-grid"></div>
+              </section>
+
+              <section class="panel event-stream-panel">
                 <div class="panel-head compact">
                   <div>
                     <p class="eyebrow">实时</p>
@@ -200,7 +247,7 @@
                 <div id="eventPreview" class="event-feed auto-scroll"></div>
               </section>
 
-              <section class="panel">
+              <section class="panel daily-summary-panel">
                 <div class="panel-head compact">
                   <div>
                     <p class="eyebrow">每日</p>

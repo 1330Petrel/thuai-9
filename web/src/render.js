@@ -33,6 +33,7 @@ const VIEW_TITLES = {
 
 export function renderApp(state) {
   document.body.dataset.mode = state.connection.role;
+  document.body.dataset.replay = state.replay.enabled ? "enabled" : "live";
   applyColorScheme(state.ui.colorScheme);
 
   if (state.connection.role !== "player" && (state.ui.activeView === "info" || state.ui.activeView === "debug")) {
@@ -48,12 +49,14 @@ export function renderApp(state) {
   setText("viewTitle", VIEW_TITLES[state.ui.activeView] || "交易大厅");
   renderConnection(state);
   renderControls(state);
+  renderReplayControls(state);
   renderViewSwitch(state);
   renderScoreboard(state);
   renderPrices(state);
   renderOrderBook(state);
   renderNews(state);
   renderEvents(state);
+  renderActionHighlights(state);
   renderDailySummaries(state);
   renderPlayerComparison(state);
   renderPortfolio(state);
@@ -166,6 +169,7 @@ function renderConnection(state) {
     connected: "已连接",
     disconnected: "已断开",
     error: "连接错误",
+    replay: "回放中",
   };
   badge.textContent = labels[state.connection.status] || state.connection.status;
   badge.dataset.status = state.connection.status;
@@ -200,6 +204,40 @@ function renderControls(state) {
   });
 }
 
+function renderReplayControls(state) {
+  const slider = document.getElementById("replaySlider");
+  const frameLabel = document.getElementById("replayFrameLabel");
+  const status = document.getElementById("replayStatus");
+  const playButton = document.getElementById("replayPlayButton");
+  const prevButton = document.getElementById("replayPrevButton");
+  const nextButton = document.getElementById("replayNextButton");
+  const speedSelect = document.getElementById("replaySpeedSelect");
+  const loaded = state.replay.loaded && state.replay.frameCount > 0;
+  const maxFrame = Math.max(0, state.replay.frameCount - 1);
+
+  if (slider) {
+    slider.max = String(maxFrame);
+    slider.value = String(Math.min(state.replay.frameIndex, maxFrame));
+    slider.disabled = !loaded;
+  }
+  if (frameLabel) {
+    frameLabel.textContent = loaded
+      ? `${state.replay.frameIndex + 1} / ${state.replay.frameCount}`
+      : "未加载";
+  }
+  if (status) {
+    status.textContent = state.replay.error || (loaded ? state.replay.label : "等待文件");
+    status.dataset.status = state.replay.error ? "error" : loaded ? "ready" : "idle";
+  }
+  if (playButton) {
+    playButton.textContent = state.replay.playing ? "暂停" : "播放";
+    playButton.disabled = !loaded;
+  }
+  if (prevButton) prevButton.disabled = !loaded || state.replay.frameIndex <= 0;
+  if (nextButton) nextButton.disabled = !loaded || state.replay.frameIndex >= maxFrame;
+  setInputValue(speedSelect, String(state.replay.speed || 1));
+}
+
 function renderViewSwitch(state) {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === state.ui.activeView);
@@ -220,7 +258,7 @@ function renderScoreboard(state) {
   node.innerHTML = state.game.scores
     .map((score) => `
       <div class="score-row">
-        <span>${escapeHtml(playerDisplayName(state, score.playerId))}</span>
+        <span>${escapeHtml(playerDisplayName(state, score.playerId, score.playerToken))}</span>
         <strong>${escapeHtml(score.score)}</strong>
       </div>
     `)
@@ -362,7 +400,7 @@ function renderEvents(state) {
   });
   const newEventIds = new Set(state.events.filter((event) => !_seenEventIds.has(event.id)).map((event) => event.id));
   const items = state.events.length
-    ? state.events.map((event) => eventMarkup(event, newEventIds.has(event.id))).join("")
+    ? state.events.map((event) => eventMarkup(event, newEventIds.has(event.id), state)).join("")
     : PLACEHOLDER;
 
   if (modalNode) {
@@ -370,21 +408,110 @@ function renderEvents(state) {
   }
   if (previewNode) {
     previewNode.innerHTML = state.events.length
-      ? state.events.slice(0, 12).map((event) => eventMarkup(event, newEventIds.has(event.id))).join("")
+      ? state.events.slice(0, 12).map((event) => eventMarkup(event, newEventIds.has(event.id), state)).join("")
       : PLACEHOLDER;
   }
   newEventIds.forEach((id) => _seenEventIds.add(id));
 }
 
-function eventMarkup(event, isNew) {
-  const isImportant = event.kind === "trade" || event.kind === "news" || event.kind === "settlement";
+function eventMarkup(event, isNew, state) {
+  const isImportant = ["trade", "order", "report", "skill", "news", "settlement"].includes(event.kind);
   const enterClass = isNew ? " event-enter" : "";
   const importantClass = isNew && isImportant ? " event-important" : "";
+  const playerMeta = eventPlayerMarkup(event, state);
+  const metrics = eventMetricMarkup(event);
   return `
     <article class="event-item${enterClass}${importantClass}" data-kind="${escapeHtml(event.kind)}">
-      <strong>${escapeHtml(event.title)}</strong>
-      <p>D${escapeHtml(event.day || "-")} T${escapeHtml(event.tick || "-")} ${escapeHtml(event.detail)}</p>
+      <div class="event-head">
+        <strong>${escapeHtml(event.title)}</strong>
+        <span class="event-badge">${escapeHtml(eventKindLabel(event.kind))}</span>
+      </div>
+      <div class="event-meta">
+        <span>D${escapeHtml(event.day || "-")} T${escapeHtml(event.tick || "-")}</span>
+        ${playerMeta}
+        ${metrics}
+      </div>
+      <p>${escapeHtml(event.detail)}</p>
     </article>
+  `;
+}
+
+function eventPlayerMarkup(event, state) {
+  const parts = [];
+  if (event.playerId >= 0 || event.playerToken) {
+    parts.push(playerDisplayName(state, event.playerId, event.playerToken));
+  }
+  if (event.buyerPlayerId >= 0 || event.buyerToken) {
+    parts.push(`买 ${playerDisplayName(state, event.buyerPlayerId, event.buyerToken)}`);
+  }
+  if (event.sellerPlayerId >= 0 || event.sellerToken) {
+    parts.push(`卖 ${playerDisplayName(state, event.sellerPlayerId, event.sellerToken)}`);
+  }
+  if (!parts.length) return "";
+  return `<span class="event-player">${escapeHtml(parts.join(" · "))}</span>`;
+}
+
+function eventMetricMarkup(event) {
+  const metrics = [];
+  if (event.side) metrics.push(sideLabel(event.side));
+  if (event.price) metrics.push(`¥${formatNumber(event.price)}`);
+  if (event.quantity) metrics.push(`${formatNumber(event.quantity)} 手`);
+  if (event.reward) metrics.push(`奖惩 ${formatNumber(event.reward)}`);
+  return metrics.map((item) => `<span>${escapeHtml(item)}</span>`).join("");
+}
+
+function eventKindLabel(kind) {
+  const labels = {
+    order: "挂单",
+    trade: "成交",
+    report: "研报",
+    skill: "技能",
+    strategy: "策略",
+    news: "新闻",
+    settlement: "结算",
+    error: "错误",
+    system: "系统",
+  };
+  return labels[kind] || kind || "事件";
+}
+
+function sideLabel(side) {
+  const normalized = String(side || "").toLowerCase();
+  if (normalized === "buy") return "买入";
+  if (normalized === "sell") return "卖出";
+  return side || "";
+}
+
+function renderActionHighlights(state) {
+  const node = document.getElementById("actionHighlights");
+  if (!node) return;
+  const actionKinds = ["order", "trade", "report", "skill"];
+  const actionEvents = state.events.filter((event) => actionKinds.includes(event.kind));
+  const counts = actionKinds.map((kind) => ({
+    kind,
+    label: eventKindLabel(kind),
+    count: actionEvents.filter((event) => event.kind === kind).length,
+  }));
+  const latest = actionEvents.slice(0, 4);
+
+  node.innerHTML = `
+    <div class="action-count-grid">
+      ${counts.map((item) => `
+        <div class="action-count" data-kind="${escapeAttribute(item.kind)}">
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.count)}</strong>
+        </div>
+      `).join("")}
+    </div>
+    <div class="action-latest-list">
+      ${latest.length ? latest.map((event) => `
+        <article class="action-latest" data-kind="${escapeAttribute(event.kind)}">
+          <span>${escapeHtml(eventKindLabel(event.kind))}</span>
+          <strong>${escapeHtml(event.title)}</strong>
+          <small>D${escapeHtml(event.day || "-")} T${escapeHtml(event.tick || "-")}</small>
+        </article>
+      `).join("") : PLACEHOLDER}
+    </div>
   `;
 }
 
@@ -423,8 +550,14 @@ function renderPlayerComparison(state) {
 
   node.innerHTML = summaries
     .map((player) => `
-      <button type="button" class="comparison-card comparison-link" data-player-id="${escapeAttribute(player.playerId)}">
-        <h3>${escapeHtml(playerDisplayName(state, player.playerId))}</h3>
+      <button type="button" class="comparison-card comparison-link" data-player-key="${escapeAttribute(player.playerId >= 0 ? player.playerId : player.token)}">
+        <h3>${escapeHtml(playerDisplayName(state, player.playerId, player.token))}</h3>
+        <div class="comparison-stats">
+          <span>NAV <strong>${formatNumber(player.nav)}</strong></span>
+          <span>成交 <strong>${formatNumber(player.tradeCount ?? player.monthlyTradeCount ?? 0)}</strong></span>
+          <span>挂单 <strong>${formatNumber(player.pendingOrderCount ?? 0)}</strong></span>
+          <span>策略 <strong>${escapeHtml((player.activeCards || []).length)}</strong></span>
+        </div>
       </button>
     `)
     .join("");
@@ -524,7 +657,7 @@ function renderSettlement(state) {
     ${rows
       .map((player) => `
         <div class="settlement-row">
-          <span>${escapeHtml(playerDisplayName(state, player.playerId))}</span>
+          <span>${escapeHtml(playerDisplayName(state, player.playerId, player.token))}</span>
           <strong>NAV ${formatNumber(player.nav)}</strong>
           <span>${formatNumber(player.tradeCount)} 笔成交</span>
         </div>
@@ -601,9 +734,9 @@ function renderTicker(state) {
     const priceMatch = detail.match(/price=([\d.]+)/);
     const qtyMatch = detail.match(/qty=([\d.]+)/);
     const sideMatch = detail.match(/side=(\w+)/);
-    const price = priceMatch ? Number(priceMatch[1]) : 0;
-    const qty = qtyMatch ? Number(qtyMatch[1]) : 0;
-    const side = sideMatch ? sideMatch[1].toLowerCase() : "";
+    const price = e.price || (priceMatch ? Number(priceMatch[1]) : 0);
+    const qty = e.quantity || (qtyMatch ? Number(qtyMatch[1]) : 0);
+    const side = String(e.side || (sideMatch ? sideMatch[1] : "")).toLowerCase();
     const cls = side === "buy" ? "up" : side === "sell" ? "down" : "";
     const arrow = cls === "up" ? "▲" : cls === "down" ? "▼" : "·";
     const sideLabel = side === "buy" ? "买入" : side === "sell" ? "卖出" : "成交";

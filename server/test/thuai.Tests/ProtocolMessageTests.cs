@@ -143,6 +143,7 @@ public class ProtocolMessageTests
 
         var report = ParseJson(new ReportResultMessage
         {
+            PlayerId = 0,
             NewsId = 7,
             SubmissionRank = 1,
             SubmitTick = 122,
@@ -152,9 +153,25 @@ public class ProtocolMessageTests
             Reward = 300,
             ActualChange = -90
         });
+        Assert.Equal(0, report.GetProperty("playerId").GetInt32());
         Assert.Equal(1, report.GetProperty("submissionRank").GetInt32());
         Assert.True(report.GetProperty("isCorrect").GetBoolean());
         Assert.Equal(-90, report.GetProperty("actualChange").GetInt64());
+
+        var trade = ParseJson(new TradeNotificationMessage
+        {
+            PlayerId = 1,
+            TradeId = 99,
+            OrderId = 11,
+            Price = 1001,
+            Quantity = 5,
+            Side = "Buy",
+            Fee = 2,
+            Tick = 12
+        });
+        Assert.Equal("TRADE_NOTIFICATION", trade.GetProperty("messageType").GetString());
+        Assert.Equal(1, trade.GetProperty("playerId").GetInt32());
+        Assert.Equal(12, trade.GetProperty("tick").GetInt32());
     }
 
     [Fact]

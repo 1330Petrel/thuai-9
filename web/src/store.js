@@ -78,6 +78,7 @@ export function createInitialState(route = {}) {
     },
     player: emptyPlayerState(),
     playerSummaries: {},
+    playerDirectory: emptyPlayerDirectory(),
     dailySummaries: [],
     strategy: {
       options: null,
@@ -88,6 +89,18 @@ export function createInitialState(route = {}) {
     },
     events: [],
     settlement: null,
+    replay: {
+      enabled: false,
+      loaded: false,
+      playing: false,
+      frameIndex: 0,
+      frameCount: 0,
+      speed: 1,
+      label: "",
+      error: "",
+      hasStats: false,
+      statEventCount: 0,
+    },
     ui: {
       eventCounter: 0,
       showSettlement: false,
@@ -127,7 +140,47 @@ export function resetUiCollections(state) {
   state.news.results = {};
   state.dailySummaries = [];
   state.playerSummaries = {};
+  state.playerDirectory = emptyPlayerDirectory();
   state.ui.readNewsCount = 0;
+}
+
+export function resetRuntimeState(state, options = {}) {
+  const initial = createInitialState({
+    role: state.connection.role,
+    token: state.connection.token,
+    adminSecret: state.connection.adminSecret,
+    server: state.connection.server,
+    localhostPort: state.connection.localhostPort,
+    colorScheme: state.ui.colorScheme,
+  });
+  const activeView = state.ui.activeView;
+  const colorScheme = state.ui.colorScheme;
+  const replay = { ...state.replay };
+
+  state.game = initial.game;
+  state.market = initial.market;
+  state.player = initial.player;
+  state.playerSummaries = initial.playerSummaries;
+  state.playerDirectory = initial.playerDirectory;
+  state.dailySummaries = initial.dailySummaries;
+  state.strategy = initial.strategy;
+  state.news = initial.news;
+  state.events = initial.events;
+  state.settlement = initial.settlement;
+  state.ui = {
+    ...initial.ui,
+    activeView,
+    colorScheme,
+  };
+  if (options.preserveReplay) {
+    state.replay = replay;
+  } else {
+    state.replay = initial.replay;
+  }
+}
+
+export function setReplayPatch(state, patch) {
+  Object.assign(state.replay, patch);
 }
 
 export function unreadNewsCount(state) {
@@ -182,7 +235,7 @@ export function applyMessage(state, message) {
         stageTickLimit: numberOr(message.stageTickLimit, state.game.stageTickLimit),
         dayTick: numberOr(message.dayTick, state.market.tick || state.game.dayTick),
         dayTickLimit: numberOr(message.dayTickLimit, state.game.dayTickLimit),
-        scores: Array.isArray(message.scores) ? message.scores : [],
+        scores: normalizeScores(message.scores),
       };
       break;
 
@@ -199,11 +252,17 @@ export function applyMessage(state, message) {
 
     case "PLAYER_STATE":
       state.player = normalizePlayerState(message);
+      registerPlayerIdentity(state, state.player.playerId, message.token || state.connection.token);
       break;
 
     case "PLAYER_SUMMARY_STATE":
-      if (message.playerId !== undefined) {
-        state.playerSummaries[message.playerId] = { ...message };
+      {
+        const summary = normalizePlayerSummary(message);
+        registerPlayerIdentity(state, summary.playerId, summary.token);
+        const key = summary.playerId >= 0 ? String(summary.playerId) : summary.token;
+        if (key) {
+          state.playerSummaries[key] = summary;
+        }
       }
       break;
 
@@ -218,12 +277,20 @@ export function applyMessage(state, message) {
       break;
 
     case "REPORT_RESULT":
-      upsertReportResult(state, message);
-      pushEvent(state, {
-        kind: "report",
-        title: `研报 ${message.isCorrect ? "正确" : "错误"}`,
-        detail: `news=${message.newsId ?? "-"} prediction=${message.prediction ?? "-"} reward=${message.reward ?? 0} change=${message.actualChange ?? 0}`,
-      });
+      if (canDisplayPrivateEvents(state)) {
+        upsertReportResult(state, message);
+        const actor = actorFromMessage(state, message);
+        pushEvent(state, {
+          kind: "report",
+          title: `${actor} 研报${message.isCorrect ? "命中" : "偏离"}`,
+          detail: `news=${message.newsId ?? "-"} prediction=${message.prediction ?? "-"} reward=${message.reward ?? 0} change=${message.actualChange ?? 0}`,
+          tick: numberOr(message.settlementTick, state.market.tick),
+          playerId: numberOr(message.playerId, -1),
+          playerToken: message.playerToken || "",
+          reward: numberOr(message.reward, 0),
+          isPrivate: true,
+        });
+      }
       break;
 
     case "STRATEGY_OPTIONS":
@@ -235,19 +302,80 @@ export function applyMessage(state, message) {
       break;
 
     case "TRADE_NOTIFICATION":
-      pushEvent(state, {
-        kind: "trade",
-        title: `成交 #${message.tradeId ?? "-"}`,
-        detail: `price=${message.price ?? 0} qty=${message.quantity ?? 0} side=${message.side ?? "-"}`,
-        tick: numberOr(message.tick, state.market.tick),
-      });
+      if (canDisplayPrivateEvents(state)) {
+        const side = String(message.side || "");
+        pushEvent(state, {
+          kind: "trade",
+          title: `${actorFromMessage(state, message)} ${side === "Sell" ? "卖出成交" : "买入成交"}`,
+          detail: `trade=${message.tradeId ?? "-"} order=${message.orderId ?? "-"} price=${message.price ?? 0} qty=${message.quantity ?? 0} fee=${message.fee ?? 0}`,
+          tick: numberOr(message.tick, state.market.tick),
+          playerId: numberOr(message.playerId, -1),
+          playerToken: message.playerToken || "",
+          side,
+          price: numberOr(message.price, 0),
+          quantity: numberOr(message.quantity, 0),
+          isPrivate: true,
+        });
+      }
       break;
 
     case "SKILL_EFFECT":
       pushEvent(state, {
         kind: "skill",
-        title: message.skillName || "技能触发",
-        detail: `${playerDisplayName(state, message.sourcePlayerId)} ${message.description || ""}`.trim(),
+        title: `${message.skillName || "技能触发"}`,
+        detail: `${playerDisplayName(state, message.sourcePlayerId)}${message.targetPlayerId !== undefined && message.targetPlayerId !== null ? ` -> ${playerDisplayName(state, message.targetPlayerId)}` : ""} ${message.description || ""}`.trim(),
+        tick: numberOr(message.tick, state.market.tick),
+        playerId: numberOr(message.sourcePlayerId, -1),
+        targetPlayerId: numberOr(message.targetPlayerId, -1),
+      });
+      break;
+
+    case "REPLAY_ORDER":
+      pushEvent(state, {
+        kind: "order",
+        title: `${actorFromMessage(state, message)} ${sideLabel(message.side)}挂单`,
+        detail: `order=${message.orderId ?? "-"} price=${message.price ?? 0} qty=${message.quantity ?? 0} remain=${message.remainingQuantity ?? message.quantity ?? 0} status=${message.status || "-"}`,
+        tick: numberOr(message.tick, state.market.tick),
+        playerId: numberOr(message.playerId, -1),
+        playerToken: message.playerToken || "",
+        side: message.side || "",
+        price: numberOr(message.price, 0),
+        quantity: numberOr(message.quantity, 0),
+        isPrivate: true,
+      });
+      break;
+
+    case "REPLAY_TRADE":
+      pushEvent(state, {
+        kind: "trade",
+        title: `成交 #${message.tradeId ?? "-"}`,
+        detail: `买方 ${playerDisplayName(state, message.buyerPlayerId, message.buyerToken)} / 卖方 ${playerDisplayName(state, message.sellerPlayerId, message.sellerToken)} price=${message.price ?? 0} qty=${message.quantity ?? 0}`,
+        tick: numberOr(message.tick, state.market.tick),
+        price: numberOr(message.price, 0),
+        quantity: numberOr(message.quantity, 0),
+        buyerPlayerId: numberOr(message.buyerPlayerId, -1),
+        sellerPlayerId: numberOr(message.sellerPlayerId, -1),
+        buyerToken: message.buyerToken || "",
+        sellerToken: message.sellerToken || "",
+        isPrivate: true,
+      });
+      break;
+
+    case "REPLAY_DRAFT":
+      pushEvent(state, {
+        kind: "strategy",
+        title: `第 ${message.month ?? state.game.currentMonth} 月策略池`,
+        detail: (Array.isArray(message.offerings) ? message.offerings : []).join(" / "),
+        tick: numberOr(message.tick, state.market.tick),
+      });
+      break;
+
+    case "REPLAY_EVENT":
+      pushEvent(state, {
+        kind: message.kind || "system",
+        title: message.title || "回放事件",
+        detail: message.detail || "",
+        tick: numberOr(message.tick, state.market.tick),
       });
       break;
 
@@ -323,6 +451,19 @@ export function pushEvent(state, event) {
     kind: event.kind || "system",
     title: event.title || "事件",
     detail: event.detail || "",
+    playerId: numberOr(event.playerId, -1),
+    playerToken: event.playerToken || "",
+    targetPlayerId: numberOr(event.targetPlayerId, -1),
+    targetPlayerToken: event.targetPlayerToken || "",
+    buyerPlayerId: numberOr(event.buyerPlayerId, -1),
+    sellerPlayerId: numberOr(event.sellerPlayerId, -1),
+    buyerToken: event.buyerToken || "",
+    sellerToken: event.sellerToken || "",
+    side: event.side || "",
+    price: numberOr(event.price, 0),
+    quantity: numberOr(event.quantity, 0),
+    reward: numberOr(event.reward, 0),
+    isPrivate: Boolean(event.isPrivate),
   });
 
   if (state.events.length > MAX_EVENTS) {
@@ -361,6 +502,7 @@ function upsertReportResult(state, message) {
   if (newsId === "") return;
   state.news.results[newsId] = {
     playerToken: message.playerToken || "",
+    playerId: numberOr(message.playerId, -1),
     prediction: message.prediction || "",
     isCorrect: Boolean(message.isCorrect),
     reward: numberOr(message.reward, 0),
@@ -393,6 +535,7 @@ function appendMarketSnapshot(state) {
 function normalizePlayerState(message) {
   return {
     playerId: numberOr(message.playerId, -1),
+    token: message.token || "",
     mora: numberOr(message.mora, 0),
     frozenMora: numberOr(message.frozenMora, 0),
     gold: numberOr(message.gold, 0),
@@ -404,9 +547,29 @@ function normalizePlayerState(message) {
   };
 }
 
+function normalizePlayerSummary(message) {
+  const pendingOrders = Array.isArray(message.pendingOrders) ? message.pendingOrders : [];
+  return {
+    playerId: numberOr(message.playerId, -1),
+    token: message.token || message.playerToken || "",
+    mora: numberOr(message.mora, 0),
+    frozenMora: numberOr(message.frozenMora, 0),
+    gold: numberOr(message.gold, 0),
+    frozenGold: numberOr(message.frozenGold, 0),
+    lockedGold: numberOr(message.lockedGold, 0),
+    nav: numberOr(message.nav, 0),
+    activeCards: Array.isArray(message.activeCards) ? message.activeCards : [],
+    pendingOrders,
+    pendingOrderCount: numberOr(message.pendingOrderCount, pendingOrders.length),
+    tradeCount: numberOr(message.tradeCount, numberOr(message.monthlyTradeCount, 0)),
+    monthlyTradeCount: numberOr(message.monthlyTradeCount, numberOr(message.tradeCount, 0)),
+  };
+}
+
 function emptyPlayerState() {
   return {
     playerId: -1,
+    token: "",
     mora: 0,
     frozenMora: 0,
     gold: 0,
@@ -418,15 +581,62 @@ function emptyPlayerState() {
   };
 }
 
+function emptyPlayerDirectory() {
+  return {
+    labelsById: {},
+    idsByToken: {},
+  };
+}
+
+function normalizeScores(scores) {
+  if (!Array.isArray(scores)) return [];
+  return scores.map((score) => ({
+    playerId: numberOr(score.playerId, -1),
+    playerToken: score.playerToken || score.token || "",
+    score: score.score ?? 0,
+  }));
+}
+
+function registerPlayerIdentity(state, playerId, token) {
+  const id = numberOr(playerId, -1);
+  const label = String(token || "").trim();
+  if (id < 0 || !label) return;
+  state.playerDirectory.labelsById[id] = label;
+  state.playerDirectory.idsByToken[label] = id;
+}
+
+function actorFromMessage(state, message) {
+  return playerDisplayName(state, numberOr(message.playerId, -1), message.playerToken || "");
+}
+
+function canDisplayPrivateEvents(state) {
+  return state.replay.enabled || state.connection.role === "admin" || state.connection.role === "player";
+}
+
+function sideLabel(side) {
+  const normalized = String(side || "").toLowerCase();
+  if (normalized === "sell") return "卖出";
+  if (normalized === "buy") return "买入";
+  return "";
+}
+
 function numberOr(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
 }
 
-export function playerDisplayName(state, playerId) {
+export function playerDisplayName(state, playerId, token = "") {
+  const tokenLabel = String(token || "").trim();
+  if (tokenLabel && tokenLabel !== "SYSTEM" && (state.replay.enabled || state.connection.role !== "observer")) {
+    return tokenLabel;
+  }
+  if (tokenLabel === "SYSTEM") return "系统";
   if (playerId === undefined || playerId === null || playerId < 0) return "-";
   if (playerId === state.player.playerId && state.connection.token) {
     return state.connection.token;
+  }
+  if (state.playerDirectory.labelsById[playerId] && (state.replay.enabled || state.connection.role !== "observer")) {
+    return state.playerDirectory.labelsById[playerId];
   }
   return `选手 ${playerId}`;
 }
