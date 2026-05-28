@@ -107,3 +107,16 @@ class SubmissionLogsOut(BaseModel):
     status: str
     compile_log: str | None
     matches: list[SubmissionMatchLogEntry]
+
+
+class PlayerMapEntry(BaseModel):
+    player_token: str
+    submission_id: int
+    team_id: int
+    team_name: str
+
+
+class PlayerMapOut(BaseModel):
+    match_id: int | None
+    status: str | None
+    players: list[PlayerMapEntry]
